@@ -9,11 +9,11 @@ class CSRNet(nn.Module):
         features = list(vgg.features.children())
         self.frontend = nn.Sequential(*features[:23])
         self.backend = nn.Sequential(
-            nn.Conv2d(512, 512, 3, padding = 2, dilation = 2), nn.ReLu(inplace = True),
             nn.Conv2d(512, 512, 3, padding = 2, dilation = 2), nn.ReLU(inplace = True),
-            nn.Conv2d(512, 512, 3, padding = 2, dilation = 2), nn.ReLu(inplace = True),
+            nn.Conv2d(512, 512, 3, padding = 2, dilation = 2), nn.ReLU(inplace = True),
+            nn.Conv2d(512, 512, 3, padding = 2, dilation = 2), nn.ReLU(inplace = True),
             nn.Conv2d(512, 256, 3, padding = 2, dilation = 2), nn.ReLU(inplace = True),
-            nn.Conv2d(256, 128, 3, padding = 2, dilation = 2), nn.ReLu(inplace = True),
+            nn.Conv2d(256, 128, 3, padding = 2, dilation = 2), nn.ReLU(inplace = True),
             nn.Conv2d(128, 64, 3, padding = 2, dilation = 2), nn.ReLU(inplace = True),
         )
         self.output_layer = nn.Conv2d(64, 1, 1)

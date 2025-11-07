@@ -1,0 +1,65 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Train CSRNet",
+      "type": "python",
+      "request": "launch",
+      "module": "scripts.train_csrnet",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "console": "integratedTerminal",
+      "args": [
+        "--data_root", "data/SHTB",
+        "--train_count", "500",
+        "--val_count", "100",
+        "--img_h", "768",
+        "--img_w", "1024",
+        "--sigma", "15",
+        "--epochs", "15",
+        "--batch_size", "2",
+        "--lr", "1e-5",
+        "--amp",
+        "--save_dir", "outputs/csrnet_shtb"
+      ]
+    },
+    {
+      "name": "Eval CSRNet",
+      "type": "python",
+      "request": "launch",
+      "module": "scripts.eval_csrnet",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "console": "integratedTerminal",
+      "args": [
+        "--data_root", "data/SHTB",
+        "--ckpt", "outputs/csrnet_shtb/best.pth",
+        "--img_h", "768",
+        "--img_w", "1024",
+        "--save_csv", "outputs/shtb_val_results.csv",
+        "--save_vis", "outputs/qualitative"
+      ]
+    },
+    {
+      "name": "UCSD Continuity",
+      "type": "python",
+      "request": "launch",
+      "module": "scripts.ucsd_continuity",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "console": "integratedTerminal",
+      "args": [
+        "--frames_dir", "data/UCSD/vid001",
+        "--ckpt", "outputs/csrnet_shtb/best.pth",
+        "--img_h", "768",
+        "--img_w", "1024",
+        "--median_k", "5",
+        "--delta_clamp", "2",
+        "--drop_rate", "0.10",
+        "--out_raw", "outputs/ucsd_counts_raw.csv",
+        "--out_smooth", "outputs/ucsd_counts_continuity.csv",
+        "--plot", "outputs/plots/ucsd_time_series.png"
+      ]
+    }
+  ]
+}
