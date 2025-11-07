@@ -9,6 +9,8 @@ from scipy.io import loadmat
 from scipy.ndimage import gaussian_filter
 from models.csrnet import CSRNet
 
+OUT_STRIDE = 8
+
 def set_seed(s = 42):
     random.seed(s)
     np.random.seed(s)
@@ -48,6 +50,8 @@ class SHTBDataset(Dataset):
         self.img_dir, self.gt_dir = img_dir, gt_dir
         self.tf = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean = [0.485,0.456,0.406], std = [0.229, 0.224, 0.225])])
 
+        self.h_out = self.h // OUT_STRIDE
+        self.w_out = self.w // OUT_STRIDE
     def __len__(self):
         return len(self.files)
     
@@ -67,7 +71,12 @@ class SHTBDataset(Dataset):
             pts[:,0] *= scale_x
             pts[:,1] *= scale_y
 
-        den = density_from_points(pts, self.h, self.w, sigma = self.sigma)
+        pts_out = pts.copy()
+        if pts_out.size > 0:
+            pts_out[:,0] /= OUT_STRIDE
+            pts_out[:,1] /= OUT_STRIDE
+        sigma_out = max(1.0, self.sigma/OUT_STRIDE)
+        den = density_from_points(pts_out, self.h_out, self.w_out, sigma = sigma_out)
 
         img_t = self.tf(img_res)
         den_t = torch.from_numpy(den).unsqueeze(0)
