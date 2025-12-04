@@ -6,23 +6,25 @@ from torch.utils.data import DataLoader
 from models.csrnet import CSRNet
 from datasets.rgbt_cc import RGBTCC_RGBDataset
 
-def set_seed(s=42):
-    random.seed(s); np.random.seed(s)
-    torch.manual_seed(s); torch.cuda.manual_seed_all(s)
+def set_seed(s = 42):
+    random.seed(s)
+    np.random.seed(s)
+    torch.manual_seed(s)
+    torch.cuda.manual_seed_all(s)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data_root", required=True, help="data/RGBT-CC-CVPR2021")
-    ap.add_argument("--img_h", type=int, default=768)
-    ap.add_argument("--img_w", type=int, default=1024)
-    ap.add_argument("--sigma", type=float, default=15.0)
-    ap.add_argument("--epochs", type=int, default=30)
-    ap.add_argument("--batch_size", type=int, default=2)
-    ap.add_argument("--lr", type=float, default=1e-5)
-    ap.add_argument("--weight_decay", type=float, default=1e-4)
-    ap.add_argument("--amp", action="store_true")
-    ap.add_argument("--num_workers", type=int, default=0)   # 0 for mac; >0 on NSCC
-    ap.add_argument("--save_dir", type=str, default="outputs/rgbtcc_rgb")
+    ap.add_argument("--data_root", required = True, help = "data/RGBT-CC-CVPR2021")
+    ap.add_argument("--img_h", type = int, default = 768)
+    ap.add_argument("--img_w", type = int, default = 1024)
+    ap.add_argument("--sigma", type = float, default = 15.0)
+    ap.add_argument("--epochs", type = int, default = 30)
+    ap.add_argument("--batch_size", type = int, default = 2)
+    ap.add_argument("--lr", type = float, default = 1e-5)
+    ap.add_argument("--weight_decay", type = float, default = 1e-4)
+    ap.add_argument("--amp", action = "store_true")
+    ap.add_argument("--num_workers", type = int, default = 0)   #0 for mac; >0 on NSCC
+    ap.add_argument("--save_dir", type = str, default = "outputs/rgbtcc_rgb")
     args = ap.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
