@@ -8,9 +8,7 @@ from torchvision import transforms
 from scipy.io import loadmat
 from scipy.ndimage import gaussian_filter
 from models.csrnet import CSRNet
-# ////// add: simple timing for heartbeats
 import time
-# //////
 
 OUT_STRIDE = 8
 
@@ -86,7 +84,6 @@ class SHTBDataset(Dataset):
         count = float(den.sum())
         return img_t, den_t, name, count
     
-#training here
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_root", type = str, required = True)
@@ -128,12 +125,9 @@ def main():
     for ep in range(1, args.epochs + 1):
         model.train()
         running = 0.0
-        # ////// timing for heartbeats
+        #timing to check how the progress is going as it goes (used due to slow computer and checking required)
         t0 = time.time()
-        # //////
-        # ////// enumerate with step so we can print progress
         for step, (img, den, _, _) in enumerate(train_dl, 1):
-            # //////
             img, den = img.to(device, non_blocking = True), den.to(device, non_blocking = True)
             optim.zero_grad(set_to_none = True)
             with torch.cuda.amp.autocast(enabled = args.amp):
@@ -143,16 +137,12 @@ def main():
             scaler.step(optim)
             scaler.update()
             running += loss.item()
-
-            # ////// heartbeat every 20 steps (prints avg sec/batch)
+            # timing is  every 20 steps (prints avg sec/batch)
             if step % 20 == 0 or step == 1:
                 elapsed = time.time() - t0
                 print(f"[epoch {ep:02d}] step {step}/{len(train_dl)} "
                       f"~{elapsed/step:.3f}s/batch  loss={loss.item():.4f}")
-            # //////
-
         train_loss = running/max(1, len(train_dl))
-
         model.eval()
         mae, rmse = 0.0, 0.0
         with torch.no_grad():
