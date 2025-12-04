@@ -11,20 +11,20 @@
       "console": "integratedTerminal",
       "args": [
         "--data_root", "data/SHTB",
-        "--train_count", "500",
-        "--val_count", "100",
-        "--img_h", "768",
-        "--img_w", "1024",
+        "--img_h", "640",            // smaller than 768 for speed (must be ÷8)
+        "--img_w", "896",            // 896 = 112×8
         "--sigma", "15",
-        "--epochs", "15",
-        "--batch_size", "2",
-        "--lr", "1e-5",
+        "--train_count", "600",
+        "--val_count", "120",
+        "--epochs", "10",
+        "--batch_size", "3",
+        "--lr", "3e-5",
         "--amp",
-        "--save_dir", "outputs/csrnet_shtb"
+        "--save_dir", "outputs/csrnet_shtb_quick"
       ]
     },
     {
-      "name": "Eval CSRNet",
+       "name": "Eval CSRNet",
       "type": "python",
       "request": "launch",
       "module": "scripts.eval_csrnet",
@@ -33,15 +33,15 @@
       "console": "integratedTerminal",
       "args": [
         "--data_root", "data/SHTB",
-        "--ckpt", "outputs/csrnet_shtb/best.pth",
-        "--img_h", "768",
-        "--img_w", "1024",
-        "--save_csv", "outputs/shtb_val_results.csv",
-        "--save_vis", "outputs/qualitative"
+        "--ckpt", "outputs/csrnet_shtb_quick/best.pth",
+        "--img_h", "640",
+        "--img_w", "896",
+        "--save_csv", "outputs/shtb_val_results_quick.csv",
+        "--save_vis", "outputs/qualitative_quick"
       ]
     },
     {
-      "name": "UCSD Continuity",
+      "name": "UCSD Continuity (video time-series)",
       "type": "python",
       "request": "launch",
       "module": "scripts.ucsd_continuity",
@@ -51,8 +51,7 @@
       "args": [
         "--frames_dir", "data/UCSD/vid001",
         "--ckpt", "outputs/csrnet_shtb/best.pth",
-        "--img_h", "768",
-        "--img_w", "1024",
+        "--img_h", "768", "--img_w", "1024",
         "--median_k", "5",
         "--delta_clamp", "2",
         "--drop_rate", "0.10",
@@ -60,6 +59,60 @@
         "--out_smooth", "outputs/ucsd_counts_continuity.csv",
         "--plot", "outputs/plots/ucsd_time_series.png"
       ]
-    }
+    },
+    {
+      "name": "Train RGBT (CVPR'21)",
+      "type": "python",
+      "request": "launch",
+      "module": "scripts.train_rgbt",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "console": "integratedTerminal",
+      "args": [
+        "--data_root", "data/RGBT-CC-CVPR2021",
+        "--img_h", "480", "--img_w", "640",
+        "--epochs", "1",
+        "--batch_size", "1",
+        "--lr", "1e-5",
+        "--amp",
+        "--save_dir", "outputs/csrnet_rgbtcc_cvpr21"
+      ]
+    },
+    {
+      "name": "Test/Eval RGBT (CVPR'21)",
+      "type": "python",
+      "request": "launch",
+      "module": "scripts.test_rgbt",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "console": "integratedTerminal",
+      "args": [
+        "--data_root", "data/RGBT-CC-CVPR2021",
+        "--split", "test",
+        "--ckpt", "outputs/csrnet_rgbtcc_cvpr21/best.pth",
+        "--img_h", "640", "--img_w", "960",
+        "--save_csv", "outputs/rgbtcc_test_results.csv",
+        "--save_vis", "outputs/qual_rgbtcc_test"
+      ]
+    },
+    {
+    "name": "Train CSRNet (Mac quick)",
+    "type": "python",
+    "request": "launch",
+    "module": "scripts.train_csrnet",
+    "cwd": "${workspaceFolder}",
+    "env": { "PYTHONPATH": "${workspaceFolder}", "PYTORCH_ENABLE_MPS_FALLBACK": "1" },
+    "console": "integratedTerminal",
+    "args": [
+      "--data_root", "data/SHTB",
+      "--img_h", "480", "--img_w", "640",
+      "--sigma", "15",
+      "--train_count", "200", "--val_count", "60",
+      "--epochs", "5",
+      "--batch_size", "1",
+      "--lr", "3e-5",
+      "--save_dir", "outputs/csrnet_shtb_mac_quick"
+    ]
+  }         
   ]
 }

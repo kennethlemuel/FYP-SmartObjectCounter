@@ -8,6 +8,9 @@ from torchvision import transforms
 from scipy.io import loadmat
 from scipy.ndimage import gaussian_filter
 from models.csrnet import CSRNet
+# ////// add: simple timing for heartbeats
+import time
+# //////
 
 OUT_STRIDE = 8
 
@@ -107,8 +110,15 @@ def main():
 
     train_ds = SHTBDataset(args.data_root, "train", (args.img_h, args.img_w), args.sigma, args.train_count)
     val_ds = SHTBDataset(args.data_root, "val", (args.img_h, args.img_w), args.sigma, args.val_count)
-    train_dl = DataLoader(train_ds, batch_size = args.batch_size, shuffle = True, num_workers = 4, pin_memory = True)
-    val_dl = DataLoader(val_ds, batch_size = 1, shuffle = False, num_workers = 2, pin_memory = True)
+
+    # ////// Mac-safe DataLoader settings + immediate visibility
+    train_dl = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
+                          num_workers=0, pin_memory=False)
+    val_dl   = DataLoader(val_ds, batch_size=1, shuffle=False,
+                          num_workers=0, pin_memory=False)
+    print(f"[init] train images={len(train_ds)}  val images={len(val_ds)}")
+    print(f"[init] train batches={len(train_dl)}  val batches={len(val_dl)}")
+    # //////
 
     optim = torch.optim.Adam(model.parameters(), lr = args.lr, weight_decay = 1e-4)
     mse = nn.MSELoss()
@@ -118,7 +128,12 @@ def main():
     for ep in range(1, args.epochs + 1):
         model.train()
         running = 0.0
-        for img, den, _, _ in train_dl:
+        # ////// timing for heartbeats
+        t0 = time.time()
+        # //////
+        # ////// enumerate with step so we can print progress
+        for step, (img, den, _, _) in enumerate(train_dl, 1):
+            # //////
             img, den = img.to(device, non_blocking = True), den.to(device, non_blocking = True)
             optim.zero_grad(set_to_none = True)
             with torch.cuda.amp.autocast(enabled = args.amp):
@@ -128,6 +143,14 @@ def main():
             scaler.step(optim)
             scaler.update()
             running += loss.item()
+
+            # ////// heartbeat every 20 steps (prints avg sec/batch)
+            if step % 20 == 0 or step == 1:
+                elapsed = time.time() - t0
+                print(f"[epoch {ep:02d}] step {step}/{len(train_dl)} "
+                      f"~{elapsed/step:.3f}s/batch  loss={loss.item():.4f}")
+            # //////
+
         train_loss = running/max(1, len(train_dl))
 
         model.eval()
@@ -151,4 +174,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
