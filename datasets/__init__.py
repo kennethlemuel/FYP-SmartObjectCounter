@@ -1,15 +1,11 @@
-from .density import (
-    density_from_points_fixed,
-    density_from_points_knn,
-    downscale_points,
-)
+from .rgbt_cc import RGBTCC_RGBDataset, load_points
 from .shtb import SHTBDataset
-from .rgbt_cc import RGBTCCDataset
+from .density import density_from_points_knn, density_from_points_fixed
 
 __all__ = [
-    "density_from_points_fixed",
-    "density_from_points_knn",
-    "downscale_points",
+    "RGBTCC_RGBDataset",
     "SHTBDataset",
-    "RGBTCCDataset",
+    "load_points",
+    "density_from_points_knn",
+    "density_from_points_fixed",
 ]

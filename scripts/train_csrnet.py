@@ -1,16 +1,29 @@
-import os, random, argparse, math
+import os, random, argparse, math, time
 import numpy as np
 import cv2
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from scipy.io import loadmat
 from scipy.ndimage import gaussian_filter
 from models.csrnet import CSRNet
-import time
 
 OUT_STRIDE = 8
+
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    try:
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
+    except Exception:
+        pass
+    return torch.device("cpu")
+
+def _autocast_device_type(device):
+    return "cuda" if device.type == "cuda" else "cpu"
 
 def set_seed(s = 42):
     random.seed(s)
@@ -19,16 +32,16 @@ def set_seed(s = 42):
     torch.cuda.manual_seed_all(s)
 
 def density_from_points(points_xy, h, w, sigma = 15):
-    dm = np.zeros((h,w), dtype = np.float32)
+    dm = np.zeros((h, w), dtype = np.float32)
     if points_xy.size == 0:
         return dm
-    xs = np.clip(points_xy[:,0].astype(int), 0, w-1)
-    ys = np.clip(points_xy[:,1].astype(int), 0, h-1)
+    xs = np.clip(points_xy[:, 0].astype(int), 0, w - 1)
+    ys = np.clip(points_xy[:, 1].astype(int), 0, h - 1)
     dm[ys, xs] = 1.0
-    dm = gaussian_filter(dm, sigma = sigma, mode = 'constant')
+    dm = gaussian_filter(dm, sigma = sigma, mode = "constant")
     s = dm.sum()
     if s > 0:
-        dm *= (len(xs)/s)
+        dm *= (len(xs) / s)
     return dm
 
 class SHTBDataset(Dataset):
@@ -41,21 +54,25 @@ class SHTBDataset(Dataset):
         img_dir = os.path.join(root, "images")
         gt_dir = os.path.join(root, "ground_truth")
         imgs = sorted([f for f in os.listdir(img_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
-        train_list = [f for i, f in enumerate(imgs) if i%5!=0]
-        val_list = [f for i, f in enumerate(imgs) if i%5==0]
+        train_list = [f for i, f in enumerate(imgs) if i % 5 != 0]
+        val_list = [f for i, f in enumerate(imgs) if i % 5 == 0]
 
         self.files = train_list if split == "train" else val_list
         if max_count is not None:
             self.files = self.files[:max_count]
 
         self.img_dir, self.gt_dir = img_dir, gt_dir
-        self.tf = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean = [0.485,0.456,0.406], std = [0.229, 0.224, 0.225])])
+        self.tf = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225])
+        ])
 
         self.h_out = self.h // OUT_STRIDE
         self.w_out = self.w // OUT_STRIDE
+
     def __len__(self):
         return len(self.files)
-    
+
     def __getitem__(self, idx):
         name = self.files[idx]
         img = cv2.imread(os.path.join(self.img_dir, name))
@@ -69,21 +86,21 @@ class SHTBDataset(Dataset):
         img_res = cv2.resize(img, (self.w, self.h), interpolation = cv2.INTER_LINEAR)
         if pts.size > 0:
             scale_x, scale_y = self.w / W, self.h / H
-            pts[:,0] *= scale_x
-            pts[:,1] *= scale_y
+            pts[:, 0] *= scale_x
+            pts[:, 1] *= scale_y
 
         pts_out = pts.copy()
         if pts_out.size > 0:
-            pts_out[:,0] /= OUT_STRIDE
-            pts_out[:,1] /= OUT_STRIDE
-        sigma_out = max(1.0, self.sigma/OUT_STRIDE)
+            pts_out[:, 0] /= OUT_STRIDE
+            pts_out[:, 1] /= OUT_STRIDE
+        sigma_out = max(1.0, self.sigma / OUT_STRIDE)
         den = density_from_points(pts_out, self.h_out, self.w_out, sigma = sigma_out)
 
         img_t = self.tf(img_res)
         den_t = torch.from_numpy(den).unsqueeze(0)
         count = float(den.sum())
         return img_t, den_t, name, count
-    
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_root", type = str, required = True)
@@ -102,65 +119,78 @@ def main():
     os.makedirs(args.save_dir, exist_ok = True)
     set_seed(42)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
+    print(f"[init] device = {device}")
+
     model = CSRNet(load_imagenet = True).to(device)
 
     train_ds = SHTBDataset(args.data_root, "train", (args.img_h, args.img_w), args.sigma, args.train_count)
     val_ds = SHTBDataset(args.data_root, "val", (args.img_h, args.img_w), args.sigma, args.val_count)
 
-    # ////// Mac-safe DataLoader settings + immediate visibility
-    train_dl = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                          num_workers=0, pin_memory=False)
-    val_dl   = DataLoader(val_ds, batch_size=1, shuffle=False,
-                          num_workers=0, pin_memory=False)
-    print(f"[init] train images={len(train_ds)}  val images={len(val_ds)}")
-    print(f"[init] train batches={len(train_dl)}  val batches={len(val_dl)}")
-    # //////
+    train_dl = DataLoader(
+        train_ds, batch_size = args.batch_size, shuffle = True,
+        num_workers = 0, pin_memory = False
+    )
+    val_dl = DataLoader(
+        val_ds, batch_size = 1, shuffle = False,
+        num_workers = 0, pin_memory = False
+    )
+    print(f"[init] train images = {len(train_ds)}  val images = {len(val_ds)}")
+    print(f"[init] train batches = {len(train_dl)}  val batches = {len(val_dl)}")
 
     optim = torch.optim.Adam(model.parameters(), lr = args.lr, weight_decay = 1e-4)
     mse = nn.MSELoss()
-    scaler = torch.cuda.amp.GradScaler(enabled = args.amp)
+    scaler = torch.amp.GradScaler("cuda", enabled = (args.amp and device.type == "cuda"))
 
     best_mae = 1e9
     for ep in range(1, args.epochs + 1):
         model.train()
         running = 0.0
-        #timing to check how the progress is going as it goes (used due to slow computer and checking required)
         t0 = time.time()
+
         for step, (img, den, _, _) in enumerate(train_dl, 1):
             img, den = img.to(device, non_blocking = True), den.to(device, non_blocking = True)
             optim.zero_grad(set_to_none = True)
-            with torch.cuda.amp.autocast(enabled = args.amp):
+            with torch.amp.autocast(device_type = _autocast_device_type(device), enabled = (args.amp and device.type == "cuda")):
                 pred = model(img)
-                loss = mse(pred,den)
+                if pred.shape[-2:] != den.shape[-2:]:
+                    den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
+                loss = mse(pred, den)
             scaler.scale(loss).backward()
             scaler.step(optim)
             scaler.update()
             running += loss.item()
-            # timing is  every 20 steps (prints avg sec/batch)
+
             if step % 20 == 0 or step == 1:
                 elapsed = time.time() - t0
-                print(f"[epoch {ep:02d}] step {step}/{len(train_dl)} "
-                      f"~{elapsed/step:.3f}s/batch  loss={loss.item():.4f}")
-        train_loss = running/max(1, len(train_dl))
+                print(f"[epoch {ep:02d}] step {step}/{len(train_dl)} ~{elapsed/step:.3f}s/batch  loss = {loss.item():.4f}")
+
+        train_loss = running / max(1, len(train_dl))
+
         model.eval()
         mae, rmse = 0.0, 0.0
         with torch.no_grad():
-            for img, den, _,_ in val_dl:
-                img = img.to(device)
-                pred = model(img)
+            for img, den, _, _ in val_dl:
+                img, den = img.to(device, non_blocking = True), den.to(device, non_blocking = True)
+                with torch.amp.autocast(device_type = _autocast_device_type(device), enabled = (args.amp and device.type == "cuda")):
+                    pred = model(img)
+                if pred.shape[-2:] != den.shape[-2:]:
+                    den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
                 c_pred = float(pred.sum().item())
                 c_gt = float(den.sum().item())
                 mae += abs(c_pred - c_gt)
-                rmse += (c_pred - c_gt)**2
-        mae /= len(val_dl)
-        rmse = math.sqrt(rmse/len(val_dl))
+                rmse += (c_pred - c_gt) ** 2
 
-        print(f"Epoch {ep: 02d}: train_loss = {train_loss: .4f} MAE = {mae: .2f} RMSE = {rmse: .2f}")
+        mae /= len(val_dl)
+        rmse = math.sqrt(rmse / len(val_dl))
+
+        print(f"Epoch {ep:02d}: train_loss = {train_loss:.4f}  MAE = {mae:.2f}  RMSE = {rmse:.2f}")
+
+        torch.save({"epoch": ep, "model": model.state_dict()}, os.path.join(args.save_dir, "last.pth"))
         if mae < best_mae:
             best_mae = mae
             torch.save({"epoch": ep, "model": model.state_dict()}, os.path.join(args.save_dir, "best.pth"))
-            print(f"-> saved best.pth (MAE {best_mae: .2f})")
+            print(f"-> saved best.pth (MAE {best_mae:.2f})")
 
 if __name__ == "__main__":
     main()
