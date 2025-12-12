@@ -109,7 +109,7 @@ class RGBTCC_RGBDataset(Dataset):
         pts_out = pts.copy()
         if pts_out.size > 0:
             pts_out[:, 0] /= OUT_STRIDE; pts_out[:, 1] /= OUT_STRIDE
-        den = density_from_points(pts_out, self.h_out, self.w_out, sigma = max(1.0, sigma / OUT_STRIDE))
+        den = density_from_points(pts_out, self.h_out, self.w_out, sigma = max(1.0, self.sigma / OUT_STRIDE))
 
         return self.tf(img_res), torch.from_numpy(den).unsqueeze(0), f"{sid}.jpg", float(len(pts))
 

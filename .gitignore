@@ -8,3 +8,7 @@ data/
 runs/
 Thumbs.db
 .DS_Store
+.vscode/
+*.o*
+*.e*
+venv/
