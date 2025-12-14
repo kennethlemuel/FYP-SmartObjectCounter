@@ -1,4 +1,3 @@
-# datasets/rgbt_cc.py
 import os, json
 import numpy as np
 import cv2
