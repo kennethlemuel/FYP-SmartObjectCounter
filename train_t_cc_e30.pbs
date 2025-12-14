@@ -1,0 +1,27 @@
+#!/bin/bash
+#PBS -N t_cc_e30
+#PBS -P personal-kenneth0
+#PBS -l select=1:ngpus=1:ncpus=8:mem=32gb
+#PBS -l walltime=06:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+cd "$PBS_O_WORKDIR" || exit 1
+
+module purge
+module load pytorch/2.6.0-py3-cu11.8
+
+export PYTHONPATH="$PBS_O_WORKDIR:$PYTHONPATH"
+
+mkdir -p outputs/t_cc_e30
+
+PY=python
+command -v python >/dev/null 2>&1 || PY=python3
+
+$PY -u scripts/train_t_cc.py \
+  --data_root ./data/RGBT-CC-CVPR2021 \
+  --epochs 30 \
+  --batch_size 1 \
+  --num_workers 2 \
+  --save_dir outputs/t_cc_e30
