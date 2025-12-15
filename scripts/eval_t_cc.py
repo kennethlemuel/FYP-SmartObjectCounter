@@ -5,8 +5,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 
 from models.csrnet import CSRNet
-from datasets.rgbt_cc import RGBTCC
-
+from datasets.rgbt_cc import RGBTCC_TDataset
 
 def to_3ch(x: torch.Tensor) -> torch.Tensor:
     if x.dim() == 3 and x.size(0) == 1:

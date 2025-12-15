@@ -1,0 +1,24 @@
+#!/bin/bash
+#PBS -N torch_smoke
+#PBS -P personal-kenneth0
+#PBS -l select=1:ngpus=1:ncpus=1:mem=4gb
+#PBS -l walltime=00:01:00
+#PBS -j oe
+
+cd "$PBS_O_WORKDIR" || exit 1
+
+module purge
+module load pytorch/2.6.0-py3-cu11.8
+
+export PYTHONPATH="$PBS_O_WORKDIR:$PYTHONPATH"
+export PYTORCH_NVML_BASED_CUDA_CHECK=0
+
+python3 - << 'PY'
+print("START")
+import torch
+print("TORCH", torch.__version__)
+print("CUDA_AVAIL", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("GPU", torch.cuda.get_device_name(0))
+print("DONE")
+PY

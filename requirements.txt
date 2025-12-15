@@ -1,8 +1,6 @@
 numpy
 scipy
 scikit-learn
-torch
-torchvision
 opencv-python
 matplotlib
 Pillow
