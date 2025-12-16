@@ -14,14 +14,12 @@ export PYTHONPATH="$PBS_O_WORKDIR:$PYTHONPATH"
 
 mkdir -p outputs/rgbt_early_e30
 
-python3 -u scripts/train_rgbt.py \
+python -u scripts/train_rgbt.py \
   --mode early \
   --data_root ./data/RGBT-CC-CVPR2021 \
   --img_h 768 \
   --img_w 1024 \
   --epochs 30 \
   --batch_size 1 \
-  --lr 1e-5 \
-  --amp \
   --num_workers 2 \
   --save_dir outputs/rgbt_early_e30
