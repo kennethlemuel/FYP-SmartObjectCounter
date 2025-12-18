@@ -1,86 +1,120 @@
-import argparse
+import os
+import sys
 import math
+import argparse
 import torch
-import numpy as np
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from models.csrnet import CSRNet
-from datasets.rgbt_cc import RGBTCC_TDataset
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-def to_3ch(x: torch.Tensor) -> torch.Tensor:
-    if x.dim() == 3 and x.size(0) == 1:
-        return x.repeat(3, 1, 1)
-    if x.dim() == 3 and x.size(0) == 3:
-        return x
-    raise ValueError(f"Unexpected thermal tensor shape: {tuple(x.shape)}")
+from models.csrnet import CSRNet
+from datasets.rgbt_cc import RGBTCC_PairedDataset
+
+
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+
+def _load_state_dict(ckpt_path, device):
+    ckpt = torch.load(ckpt_path, map_location = device)
+    if isinstance(ckpt, dict):
+        if "model" in ckpt and isinstance(ckpt["model"], dict):
+            return ckpt["model"]
+        if "state_dict" in ckpt and isinstance(ckpt["state_dict"], dict):
+            return ckpt["state_dict"]
+    return ckpt
+
+
+def _game(pred_den, gt_den, L):
+    h, w = pred_den.shape
+    k = 2 ** L
+    hs = max(1, h // k)
+    ws = max(1, w // k)
+
+    err = 0.0
+    for i in range(k):
+        for j in range(k):
+            y0 = i * hs
+            y1 = (i + 1) * hs if i < k - 1 else h
+            x0 = j * ws
+            x1 = (j + 1) * ws if j < k - 1 else w
+            p = float(pred_den[y0:y1, x0:x1].sum().item())
+            g = float(gt_den[y0:y1, x0:x1].sum().item())
+            err += abs(p - g)
+    return err
 
 
 @torch.no_grad()
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_root", type = str, required = True)
-    parser.add_argument("--ckpt", type = str, required = True)
-    parser.add_argument("--split", type = str, default = "test", choices = ["train", "val", "test"])
-    parser.add_argument("--img_h", type = int, default = 768)
-    parser.add_argument("--img_w", type = int, default = 1024)
-    parser.add_argument("--sigma", type = float, default = 15.0)
-    parser.add_argument("--num_workers", type = int, default = 2)
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data_root", required = True)
+    ap.add_argument("--split", default = "val", choices = ["train", "val", "test"])
+    ap.add_argument("--img_h", type = int, default = 768)
+    ap.add_argument("--img_w", type = int, default = 1024)
+    ap.add_argument("--sigma", type = float, default = 15.0)
+    ap.add_argument("--ckpt", required = True)
+    ap.add_argument("--batch_size", type = int, default = 1)
+    ap.add_argument("--num_workers", type = int, default = 2)
+    args = ap.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
 
-    ds = RGBTCC(
-        data_root = args.data_root,
+    ds = RGBTCC_PairedDataset(
+        root = args.data_root,
         split = args.split,
-        img_h = args.img_h,
-        img_w = args.img_w,
+        img_size = (args.img_h, args.img_w),
         sigma = args.sigma,
     )
-    loader = DataLoader(ds, batch_size = 1, shuffle = False, num_workers = args.num_workers, pin_memory = True)
+    dl = DataLoader(
+        ds,
+        batch_size = args.batch_size,
+        shuffle = False,
+        num_workers = args.num_workers if device.type == "cuda" else 0,
+        pin_memory = (device.type == "cuda"),
+        drop_last = False,
+    )
 
-    model = CSRNet().to(device)
-    ckpt = torch.load(args.ckpt, map_location = "cpu")
-    state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-    model.load_state_dict(state, strict = True)
+    model = CSRNet(load_imagenet = True).to(device)
+    sd = _load_state_dict(args.ckpt, device)
+    model.load_state_dict(sd, strict = True)
     model.eval()
 
-    abs_err = []
-    sq_err = []
+    mae = 0.0
+    rmse = 0.0
+    game = [0.0, 0.0, 0.0, 0.0]
 
-    for batch in loader:
-        if isinstance(batch, (list, tuple)):
-            rgb, t, gt = batch[0], batch[1], batch[-1]
-        elif isinstance(batch, dict):
-            t = batch.get("t", None) or batch.get("thermal", None)
-            gt = batch.get("gt", None) or batch.get("density", None)
-        else:
-            raise TypeError(f"Unsupported batch type: {type(batch)}")
+    for batch in dl:
+        _, x_t3, den, _, _ = batch
+        x_t3 = x_t3.to(device, non_blocking = True)
+        den = den.to(device, non_blocking = True)
 
-        if t is None or gt is None:
-            raise RuntimeError("Dataset batch must provide thermal (t/thermal) and gt (gt/density).")
+        pred = model(x_t3)
 
-        t = t.to(device, non_blocking = True).float()
-        gt = gt.to(device, non_blocking = True).float()
+        if pred.shape[-2:] != den.shape[-2:]:
+            den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
 
-        if t.dim() == 3:
-            t = t.unsqueeze(0)
-        if gt.dim() == 3:
-            gt = gt.unsqueeze(0)
+        c_pred = float(pred.sum().item())
+        c_gt = float(den.sum().item())
 
-        t3 = torch.stack([to_3ch(t[i]) for i in range(t.size(0))], dim = 0)
+        mae += abs(c_pred - c_gt)
+        rmse += (c_pred - c_gt) ** 2
 
-        pred = model(t3)
-        pred_cnt = pred.sum().item()
-        gt_cnt = gt.sum().item()
+        p2 = pred[0, 0]
+        g2 = den[0, 0]
+        for L in range(4):
+            game[L] += _game(p2, g2, L)
 
-        e = abs(pred_cnt - gt_cnt)
-        abs_err.append(e)
-        sq_err.append(e * e)
+    n = len(dl)
+    mae /= n
+    rmse = math.sqrt(rmse / n)
+    game = [g / n for g in game]
 
-    mae = float(np.mean(abs_err)) if abs_err else 0.0
-    rmse = float(math.sqrt(np.mean(sq_err))) if sq_err else 0.0
-
-    print(f"[T-only] split={args.split} MAE={mae:.4f} RMSE={rmse:.4f}")
+    print(f"[t] split = {args.split}  MAE = {mae:.2f}  RMSE = {rmse:.2f}  GAME0 = {game[0]:.2f}  GAME1 = {game[1]:.2f}  GAME2 = {game[2]:.2f}  GAME3 = {game[3]:.2f}")
 
 
 if __name__ == "__main__":
