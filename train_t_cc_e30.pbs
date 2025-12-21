@@ -1,22 +1,24 @@
 #!/bin/bash
-#PBS -N t_cc_e30
+#PBS -N train_t_cc_e30
 #PBS -P personal-kenneth0
-#PBS -l select=1:ngpus=1:ncpus=8:mem=32gb
+#PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
 #PBS -l walltime=06:00:00
 #PBS -j oe
 
-cd "$PBS_O_WORKDIR" || exit 1
+REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+cd "$REPO" || exit 1
 
 module purge
 module load pytorch/2.6.0-py3-cu11.8
 
-export PYTHONPATH="$PBS_O_WORKDIR:$PYTHONPATH"
+mkdir -p logs
+exec > "logs/${PBS_JOBNAME}.o${PBS_JOBID}" 2>&1
 
-mkdir -p outputs/t_cc_e30
+export PYTHONPATH="$REPO:$PYTHONPATH"
 
 python3 -u scripts/train_t_cc.py \
   --data_root ./data/RGBT-CC-CVPR2021 \
   --epochs 30 \
   --batch_size 1 \
-  --num_workers 2 \
+  --lr 1e-5 \
   --save_dir outputs/t_cc_e30

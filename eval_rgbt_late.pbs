@@ -5,14 +5,19 @@
 #PBS -l walltime=00:10:00
 #PBS -j oe
 
-cd "$PBS_O_WORKDIR" || exit 1
+REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+cd "$REPO" || exit 1
 
 module purge
 module load pytorch/2.6.0-py3-cu11.8
 
-python scripts/eval_rgbt.py \
+mkdir -p logs
+exec > "logs/${PBS_JOBNAME}.o${PBS_JOBID}" 2>&1
+
+export PYTHONPATH="$REPO:$PYTHONPATH"
+
+python3 -u scripts/eval_rgbt.py \
   --mode late \
   --data_root ./data/RGBT-CC-CVPR2021 \
   --ckpt outputs/rgbt_late_e30/late_best.pth \
   --split val \
-  --save_dir outputs/rgbt_late_test
