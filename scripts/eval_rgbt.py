@@ -12,6 +12,7 @@ if PROJECT_ROOT not in sys.path:
 
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
+from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
 from datasets.rgbt_cc import RGBTCC_PairedDataset, RGBTCC_EarlyFusionDataset
 
 
@@ -53,7 +54,7 @@ def _game(pred_den, gt_den, L):
 @torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices = ["early", "late"], required = True)
+    ap.add_argument("--mode", choices = ["early", "late", "adaptive_late"], required = True)
     ap.add_argument("--data_root", required = True)
     ap.add_argument("--split", default = "val", choices = ["train", "val", "test"])
     ap.add_argument("--img_h", type = int, default = 768)
@@ -74,6 +75,7 @@ def main():
             sigma = args.sigma,
         )
         model = CSRNetRGBT_Early(load_imagenet = True).to(device)
+
     else:
         ds = RGBTCC_PairedDataset(
             root = args.data_root,
@@ -81,7 +83,10 @@ def main():
             img_size = (args.img_h, args.img_w),
             sigma = args.sigma,
         )
-        model = CSRNetRGBT_Late(load_imagenet = True).to(device)
+        if args.mode == "late":
+            model = CSRNetRGBT_Late(load_imagenet = True).to(device)
+        else:
+            model = CSRNetRGBT_AdaptiveLate(load_imagenet = True).to(device)
 
     dl = DataLoader(
         ds,
@@ -132,7 +137,8 @@ def main():
     rmse = math.sqrt(rmse / n)
     game = [g / n for g in game]
 
-    print(f"[rgbt-{args.mode}] split = {args.split}  MAE = {mae:.2f}  RMSE = {rmse:.2f}  GAME0 = {game[0]:.2f}  GAME1 = {game[1]:.2f}  GAME2 = {game[2]:.2f}  GAME3 = {game[3]:.2f}")
+    tag = "adaptive-late" if args.mode == "adaptive_late" else args.mode
+    print(f"[rgbt-{tag}] split = {args.split}  MAE = {mae:.2f}  RMSE = {rmse:.2f}  GAME0 = {game[0]:.2f}  GAME1 = {game[1]:.2f}  GAME2 = {game[2]:.2f}  GAME3 = {game[3]:.2f}")
 
 
 if __name__ == "__main__":

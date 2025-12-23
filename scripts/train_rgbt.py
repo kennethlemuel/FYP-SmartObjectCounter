@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from models.csrnet import CSRNet
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
+from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
 from datasets.rgbt_cc import RGBTCC_RGBDataset, RGBTCC_TDataset, RGBTCC_PairedDataset
 
 
@@ -105,7 +106,7 @@ def evaluate(model, loader, device, mode):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices = ["rgb", "t", "early", "late"], required = True)
+    ap.add_argument("--mode", choices = ["rgb", "t", "early", "late", "adaptive_late"], required = True)
     ap.add_argument("--data_root", required = True)
     ap.add_argument("--split_train", default = "train")
     ap.add_argument("--split_val", default = "val")
@@ -179,8 +180,10 @@ def main():
         model = CSRNet(load_imagenet = True).to(device)
     elif args.mode == "early":
         model = CSRNetRGBT_Early(load_imagenet = True).to(device)
-    else:
+    elif args.mode == "late":
         model = CSRNetRGBT_Late(load_imagenet = True).to(device)
+    else:
+        model = CSRNetRGBT_AdaptiveLate(load_imagenet = True).to(device)
 
     optim = torch.optim.AdamW(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
     mse = nn.MSELoss()
