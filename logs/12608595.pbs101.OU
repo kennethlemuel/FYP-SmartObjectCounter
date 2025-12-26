@@ -1,0 +1,38 @@
+[t] split = test  MAE = 20.38  RMSE = 34.71  GAME0 = 20.38  GAME1 = 26.35  GAME2 = 31.76  GAME3 = 38.51
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+					Resource Usage Summary
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+JobId: 12608595.pbs101
+Project: personal-kenneth0
+Server: pbs101
+Exit Status: 0
+Execution Nodes Used: (x1000c0s0b0n1:ngpus=1:ncpus=16:mem=115343360kb)
+Time of Summary: 2025-12-26 13:01:03.869927
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+					General Usage
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+NCPUs: 16
+CPU Time Used: 0:00:58
+CPU Time per node: x1000c0s0b0n1:(0:00:58)
+Memory: Requested(110gb), Used(2.34GB)
+Memory used per node: x1000c0s0b0n1:(2456108kb)
+Vmem Used: 38.82GB
+Walltime: Requested(00:10:00), Used(00:00:24)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+					Accelerator Usage
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+GPU Duration: x1000c0s0b0n1:(gpu0:19sec)
+Avg GPU Power Consumed: x1000c0s0b0n1:(gpu0:179.11W)
+Max GPU Memory Used: x1000c0s0b0n1:(gpu0:1.21GB)
+Memory Throughput Rate (Average): x1000c0s0b0n1:(gpu0:24%)
+Memory Throughput Rate (Max): x1000c0s0b0n1:(gpu0:35%)
+Memory Throughput Rate (Min): x1000c0s0b0n1:(gpu0:15%)
+GPU SM Utilization (Average): x1000c0s0b0n1:(gpu0:57%)
+GPU SM Utilization (Max): x1000c0s0b0n1:(gpu0:71%)
+GPU SM Utilization (Min): x1000c0s0b0n1:(gpu0:48%)
+GPU Usage Percentage: x1000c0s0b0n1:(gpu0:33.891%)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Warning: None
+GPU application profile: Medium
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
