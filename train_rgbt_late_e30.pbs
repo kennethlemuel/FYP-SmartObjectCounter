@@ -4,12 +4,11 @@
 #PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
 #PBS -l walltime=06:00:00
 #PBS -j oe
+#PBS -o /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/
+#PBS -e /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/
 
 REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
 cd "$REPO" || exit 1
-
-module purge
-module load pytorch/2.6.0-py3-cu11.8
 
 mkdir -p logs
 exec > "logs/${PBS_JOBNAME}.o${PBS_JOBID}" 2>&1

@@ -1,8 +1,8 @@
 #!/bin/bash
-#PBS -N train_t_cc_e30
+#PBS -N eval_rgbt_adaptive_late_e30
 #PBS -P personal-kenneth0
-#PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
-#PBS -l walltime=06:00:00
+#PBS -l select=1:ngpus=1:ncpus=8:mem=32gb
+#PBS -l walltime=00:10:00
 #PBS -j oe
 #PBS -o /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/
 #PBS -e /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/
@@ -15,9 +15,13 @@ module load pytorch/2.6.0-py3-cu11.8
 
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
-python3 -u scripts/train_t_cc.py \
+python3 -u scripts/eval_rgbt.py \
+  --mode adaptive_late \
   --data_root ./data/RGBT-CC-CVPR2021 \
-  --epochs 30 \
+  --ckpt outputs/rgbt_adaptive_late_e30/adaptive_late_best.pth \
+  --split val \
+  --img_h 768 \
+  --img_w 1024 \
+  --sigma 15.0 \
   --batch_size 1 \
-  --lr 1e-5 \
-  --save_dir outputs/t_cc_e30
+  --num_workers 2
