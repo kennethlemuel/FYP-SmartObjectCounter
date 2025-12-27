@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import math
 import argparse
@@ -10,11 +11,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from models.csrnet import CSRNet
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
 from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
-from datasets.rgbt_cc import RGBTCC_RGBDataset, RGBTCC_TDataset, RGBTCC_PairedDataset
+from datasets.rgbt_cc import RGBTCC_RGBDataset, RGBTCC_PairedDataset, RGBTCC_EarlyFusionDataset
 
 
 def set_seed(s = 42, deterministic = True):
@@ -30,11 +35,6 @@ def set_seed(s = 42, deterministic = True):
 def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
-    try:
-        if torch.backends.mps.is_available():
-            return torch.device("mps")
-    except Exception:
-        pass
     return torch.device("cpu")
 
 
@@ -71,36 +71,35 @@ def evaluate(model, loader, device, mode):
             pred = model(x_rgb)
 
         elif mode == "t":
-            x_t1, den, _, _ = batch
-            x_t1 = x_t1.to(device, non_blocking = True)
+            x_rgb, x_t3, den, _, _ = batch
+            x_t3 = x_t3.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
-            x_t3 = x_t1.repeat(1, 3, 1, 1)
             pred = model(x_t3)
+
+        elif mode == "early":
+            x4, den, _, _ = batch
+            x4 = x4.to(device, non_blocking = True)
+            den = den.to(device, non_blocking = True)
+            pred = model(x4)
 
         else:
             x_rgb, x_t3, den, _, _ = batch
             x_rgb = x_rgb.to(device, non_blocking = True)
             x_t3 = x_t3.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
-
-            if mode == "early":
-                t_gray = x_t3[:, :1, :, :]
-                x4 = torch.cat([x_rgb, t_gray], dim = 1)
-                pred = model(x4)
-            else:
-                pred = model(x_rgb, x_t3)
+            pred = model(x_rgb, x_t3)
 
         if pred.shape[-2:] != den.shape[-2:]:
             den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
 
         c_pred = float(pred.sum().item())
         c_gt = float(den.sum().item())
-
         mae += abs(c_pred - c_gt)
         rmse += (c_pred - c_gt) ** 2
 
-    mae /= len(loader)
-    rmse = math.sqrt(rmse / len(loader))
+    n = max(1, len(loader))
+    mae /= n
+    rmse = math.sqrt(rmse / n)
     return mae, rmse
 
 
@@ -115,7 +114,7 @@ def main():
     ap.add_argument("--sigma", type = float, default = 15.0)
     ap.add_argument("--epochs", type = int, default = 30)
     ap.add_argument("--batch_size", type = int, default = 1)
-    ap.add_argument("--lr", type = float, default = 5e-6)
+    ap.add_argument("--lr", type = float, default = 1e-5)
     ap.add_argument("--weight_decay", type = float, default = 1e-4)
     ap.add_argument("--amp", action = "store_true")
     ap.add_argument("--save_dir", required = True)
@@ -141,9 +140,9 @@ def main():
     if args.mode == "rgb":
         train_ds = RGBTCC_RGBDataset(args.data_root, args.split_train, img_size, args.sigma)
         val_ds = RGBTCC_RGBDataset(args.data_root, args.split_val, img_size, args.sigma)
-    elif args.mode == "t":
-        train_ds = RGBTCC_TDataset(args.data_root, args.split_train, img_size, args.sigma)
-        val_ds = RGBTCC_TDataset(args.data_root, args.split_val, img_size, args.sigma)
+    elif args.mode == "early":
+        train_ds = RGBTCC_EarlyFusionDataset(args.data_root, args.split_train, img_size, args.sigma)
+        val_ds = RGBTCC_EarlyFusionDataset(args.data_root, args.split_val, img_size, args.sigma)
     else:
         train_ds = RGBTCC_PairedDataset(args.data_root, args.split_train, img_size, args.sigma)
         val_ds = RGBTCC_PairedDataset(args.data_root, args.split_val, img_size, args.sigma)
@@ -174,9 +173,7 @@ def main():
 
     print(f"[init] train = {len(train_ds)}  val = {len(val_ds)}  workers = {workers}")
 
-    if args.mode == "rgb":
-        model = CSRNet(load_imagenet = True).to(device)
-    elif args.mode == "t":
+    if args.mode in ["rgb", "t"]:
         model = CSRNet(load_imagenet = True).to(device)
     elif args.mode == "early":
         model = CSRNetRGBT_Early(load_imagenet = True).to(device)
@@ -196,10 +193,9 @@ def main():
         factor = args.plateau_factor,
         patience = args.plateau_patience,
         min_lr = args.min_lr,
-        verbose = False,
     )
 
-    ema = EMA(model, decay = args.ema_decay) if args.ema_decay > 0 else None
+    ema = EMA(model, decay = args.ema_decay) if args.ema_decay and args.ema_decay > 0 else None
 
     best_mae = float("inf")
     base_lr = args.lr
@@ -228,24 +224,23 @@ def main():
                     pred = model(x_rgb)
 
                 elif args.mode == "t":
-                    x_t1, den, _, _ = batch
-                    x_t1 = x_t1.to(device, non_blocking = True)
+                    x_rgb, x_t3, den, _, _ = batch
+                    x_t3 = x_t3.to(device, non_blocking = True)
                     den = den.to(device, non_blocking = True)
-                    x_t3 = x_t1.repeat(1, 3, 1, 1)
                     pred = model(x_t3)
+
+                elif args.mode == "early":
+                    x4, den, _, _ = batch
+                    x4 = x4.to(device, non_blocking = True)
+                    den = den.to(device, non_blocking = True)
+                    pred = model(x4)
 
                 else:
                     x_rgb, x_t3, den, _, _ = batch
                     x_rgb = x_rgb.to(device, non_blocking = True)
                     x_t3 = x_t3.to(device, non_blocking = True)
                     den = den.to(device, non_blocking = True)
-
-                    if args.mode == "early":
-                        t_gray = x_t3[:, :1, :, :]
-                        x4 = torch.cat([x_rgb, t_gray], dim = 1)
-                        pred = model(x4)
-                    else:
-                        pred = model(x_rgb, x_t3)
+                    pred = model(x_rgb, x_t3)
 
                 if pred.shape[-2:] != den.shape[-2:]:
                     den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
@@ -254,7 +249,7 @@ def main():
 
             scaler.scale(loss).backward()
 
-            if args.clip_grad is not None and args.clip_grad > 0:
+            if args.clip_grad and args.clip_grad > 0:
                 scaler.unscale_(optim)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = args.clip_grad)
 
@@ -281,7 +276,6 @@ def main():
 
         scheduler.step(val_mae)
 
-        last_path = os.path.join(args.save_dir, f"{args.mode}_last.pth")
         torch.save(
             {
                 "epoch": ep,
@@ -290,12 +284,11 @@ def main():
                 "val_rmse": val_rmse,
                 "lr": optim.param_groups[0]["lr"],
             },
-            last_path
+            os.path.join(args.save_dir, f"{args.mode}_last.pth")
         )
 
         if val_mae < best_mae:
             best_mae = val_mae
-            best_path = os.path.join(args.save_dir, f"{args.mode}_best.pth")
             torch.save(
                 {
                     "epoch": ep,
@@ -304,9 +297,9 @@ def main():
                     "val_rmse": val_rmse,
                     "lr": optim.param_groups[0]["lr"],
                 },
-                best_path
+                os.path.join(args.save_dir, f"{args.mode}_best.pth")
             )
-            print(f"-> saved {os.path.basename(best_path)} (MAE {val_mae:.2f})")
+            print(f"-> saved {args.mode}_best.pth (MAE {val_mae:.2f})")
 
         dt = time.time() - t0
         print(

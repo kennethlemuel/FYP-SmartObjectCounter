@@ -10,8 +10,8 @@
 REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
 cd "$REPO" || exit 1
 
-mkdir -p logs
-exec > "logs/${PBS_JOBNAME}.o${PBS_JOBID}" 2>&1
+module purge
+module load pytorch/2.6.0-py3-cu11.8
 
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
