@@ -1,11 +1,11 @@
 #!/bin/bash
-#PBS -N eval_t_testsplit
+#PBS -N eval_t_test
 #PBS -P personal-kenneth0
 #PBS -l select=1:ngpus=1:ncpus=8:mem=32gb
 #PBS -l walltime=00:10:00
 #PBS -j oe
-#PBS -o /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/${PBS_JOBNAME}.o${PBS_JOBID}
-#PBS -e /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/${PBS_JOBNAME}.e${PBS_JOBID}
+#PBS -o /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/
+#PBS -e /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/
 
 REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
 cd "$REPO" || exit 1
