@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N eval_t_cc_testsplit
+#PBS -N eval_t_testsplit
 #PBS -P personal-kenneth0
 #PBS -l select=1:ngpus=1:ncpus=8:mem=32gb
 #PBS -l walltime=00:10:00
@@ -17,7 +17,7 @@ export PYTHONPATH="$REPO:$PYTHONPATH"
 
 python3 -u scripts/eval_t_cc.py \
   --data_root ./data/RGBT-CC-CVPR2021 \
-  --ckpt outputs/t_cc_e30/best_t.pth \
+  --ckpt outputs/t_e30/t_best.pth \
   --split test \
   --img_h 768 \
   --img_w 1024 \
