@@ -87,6 +87,24 @@ def _crop_params(h, w, crop, stride = OUT_STRIDE):
     return y0, y0 + ch, x0, x0 + cw
 
 
+class MakeResizable(Dataset):
+    def __init__(self, base):
+        self.base = base
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        sample = self.base[idx]
+        out = []
+        for v in sample:
+            if torch.is_tensor(v):
+                out.append(_make_resizable(v))
+            else:
+                out.append(v)
+        return tuple(out)
+
+
 class TrainAugment(Dataset):
     def __init__(self, base, mode, crop_size = 256, flip_prob = 0.5, stride = OUT_STRIDE):
         self.base = base
@@ -275,7 +293,7 @@ def main():
         base_val = RGBTCC_PairedDataset(args.data_root, args.split_val, img_size, args.sigma)
 
     train_ds = TrainAugment(base_train, mode = args.mode, crop_size = args.crop_size, flip_prob = args.flip_prob)
-    val_ds = base_val
+    val_ds = MakeResizable(base_val)
 
     if args.num_workers < 0:
         workers = 4 if device.type == "cuda" else 0
@@ -317,10 +335,34 @@ def main():
     else:
         model = CSRNetRGBT_AdaptiveLate(load_imagenet = True).to(device)
 
-    if args.optimizer == "adam":
-        optim = torch.optim.Adam(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
+    # ---- FIX: adaptive_late gate learns faster than the backbones ----
+    if args.mode == "adaptive_late":
+        if not hasattr(model, "gate"):
+            raise RuntimeError("adaptive_late model must have attribute `gate` (nn.Module)")
+
+        gate_params = list(model.gate.parameters())
+        backbone_params = [p for n, p in model.named_parameters() if not n.startswith("gate.")]
+
+        if args.optimizer == "adam":
+            optim = torch.optim.Adam(
+                [
+                    {"params": backbone_params, "lr": args.lr, "weight_decay": args.weight_decay},
+                    {"params": gate_params, "lr": args.lr * 10.0, "weight_decay": 0.0},
+                ]
+            )
+        else:
+            optim = torch.optim.AdamW(
+                [
+                    {"params": backbone_params, "lr": args.lr, "weight_decay": args.weight_decay},
+                    {"params": gate_params, "lr": args.lr * 10.0, "weight_decay": 0.0},
+                ]
+            )
     else:
-        optim = torch.optim.AdamW(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
+        if args.optimizer == "adam":
+            optim = torch.optim.Adam(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
+        else:
+            optim = torch.optim.AdamW(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
+    # ---------------------------------------------------------------
 
     mse = nn.MSELoss()
     scaler = torch.amp.GradScaler("cuda", enabled = (args.amp and device.type == "cuda"))

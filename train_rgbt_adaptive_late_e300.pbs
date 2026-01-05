@@ -18,7 +18,7 @@ export PYTHONPATH="$REPO:$PYTHONPATH"
 python3 -u scripts/train_rgbt.py \
   --mode adaptive_late \
   --data_root ./data/RGBT-CC-CVPR2021 \
-  --epochs 300 \
+  --epochs 30 \
   --batch_size 16 \
   --lr 1e-5 \
   --optimizer adam \

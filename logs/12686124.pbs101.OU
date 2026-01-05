@@ -1,0 +1,109 @@
+[init] device = cuda
+[init] train = 1030  val = 200  workers = 4
+[e001 s0001/64] loss = 1006.131958
+[e001 s0050/64] loss = 10.245407
+-> saved adaptive_late_best.pth (MAE 4460.50)
+Epoch 001: train_loss = 229.586722  MAE = 4460.50  RMSE = 5184.43  lr = 1.00e-05  time = 71.0s
+[e002 s0001/64] loss = 7.495992
+[e002 s0050/64] loss = 4.405355
+-> saved adaptive_late_best.pth (MAE 2130.62)
+Epoch 002: train_loss = 5.178510  MAE = 2130.62  RMSE = 2564.77  lr = 1.00e-05  time = 37.5s
+[e003 s0001/64] loss = 3.999980
+[e003 s0050/64] loss = 2.625705
+-> saved adaptive_late_best.pth (MAE 1313.96)
+Epoch 003: train_loss = 2.933876  MAE = 1313.96  RMSE = 1588.16  lr = 1.00e-05  time = 37.6s
+[e004 s0001/64] loss = 2.147263
+[e004 s0050/64] loss = 1.524683
+-> saved adaptive_late_best.pth (MAE 843.91)
+Epoch 004: train_loss = 1.815339  MAE = 843.91  RMSE = 1032.56  lr = 1.00e-05  time = 37.6s
+[e005 s0001/64] loss = 1.627140
+[e005 s0050/64] loss = 0.879053
+-> saved adaptive_late_best.pth (MAE 563.55)
+Epoch 005: train_loss = 1.062266  MAE = 563.55  RMSE = 710.01  lr = 1.00e-05  time = 37.6s
+[e006 s0001/64] loss = 0.764628
+[e006 s0050/64] loss = 0.556067
+-> saved adaptive_late_best.pth (MAE 483.14)
+Epoch 006: train_loss = 0.660444  MAE = 483.14  RMSE = 610.21  lr = 1.00e-05  time = 37.6s
+[e007 s0001/64] loss = 0.559781
+[e007 s0050/64] loss = 0.389654
+Epoch 007: train_loss = 0.450682  MAE = 549.83  RMSE = 668.14  lr = 1.00e-05  time = 37.5s
+[e008 s0001/64] loss = 0.345599
+[e008 s0050/64] loss = 0.285872
+Epoch 008: train_loss = 0.323038  MAE = 497.57  RMSE = 583.76  lr = 1.00e-05  time = 37.4s
+[e009 s0001/64] loss = 0.259667
+[e009 s0050/64] loss = 0.205304
+-> saved adaptive_late_best.pth (MAE 440.43)
+Epoch 009: train_loss = 0.249347  MAE = 440.43  RMSE = 506.33  lr = 1.00e-05  time = 37.4s
+[e010 s0001/64] loss = 0.217917
+[e010 s0050/64] loss = 0.180330
+-> saved adaptive_late_best.pth (MAE 298.29)
+Epoch 010: train_loss = 0.195098  MAE = 298.29  RMSE = 348.19  lr = 1.00e-05  time = 37.6s
+[e011 s0001/64] loss = 0.176407
+[e011 s0050/64] loss = 0.156590
+-> saved adaptive_late_best.pth (MAE 265.37)
+Epoch 011: train_loss = 0.156316  MAE = 265.37  RMSE = 309.58  lr = 1.00e-05  time = 37.6s
+[e012 s0001/64] loss = 0.150070
+[e012 s0050/64] loss = 0.115724
+-> saved adaptive_late_best.pth (MAE 244.43)
+Epoch 012: train_loss = 0.129397  MAE = 244.43  RMSE = 283.56  lr = 1.00e-05  time = 37.5s
+[e013 s0001/64] loss = 0.123065
+[e013 s0050/64] loss = 0.115777
+-> saved adaptive_late_best.pth (MAE 200.78)
+Epoch 013: train_loss = 0.109657  MAE = 200.78  RMSE = 236.50  lr = 1.00e-05  time = 37.5s
+[e014 s0001/64] loss = 0.113702
+[e014 s0050/64] loss = 0.096327
+-> saved adaptive_late_best.pth (MAE 170.92)
+Epoch 014: train_loss = 0.093007  MAE = 170.92  RMSE = 203.97  lr = 1.00e-05  time = 37.6s
+[e015 s0001/64] loss = 0.080233
+[e015 s0050/64] loss = 0.077215
+-> saved adaptive_late_best.pth (MAE 141.00)
+Epoch 015: train_loss = 0.079399  MAE = 141.00  RMSE = 171.99  lr = 1.00e-05  time = 37.7s
+[e016 s0001/64] loss = 0.069815
+[e016 s0050/64] loss = 0.074986
+-> saved adaptive_late_best.pth (MAE 113.46)
+Epoch 016: train_loss = 0.067626  MAE = 113.46  RMSE = 142.41  lr = 1.00e-05  time = 37.5s
+[e017 s0001/64] loss = 0.065193
+[e017 s0050/64] loss = 0.051862
+-> saved adaptive_late_best.pth (MAE 86.16)
+Epoch 017: train_loss = 0.061185  MAE = 86.16  RMSE = 111.05  lr = 1.00e-05  time = 37.7s
+[e018 s0001/64] loss = 0.058423
+[e018 s0050/64] loss = 0.047644
+-> saved adaptive_late_best.pth (MAE 71.49)
+Epoch 018: train_loss = 0.052066  MAE = 71.49  RMSE = 94.03  lr = 1.00e-05  time = 37.3s
+[e019 s0001/64] loss = 0.046235
+[e019 s0050/64] loss = 0.044614
+-> saved adaptive_late_best.pth (MAE 71.32)
+Epoch 019: train_loss = 0.046102  MAE = 71.32  RMSE = 92.97  lr = 1.00e-05  time = 37.6s
+[e020 s0001/64] loss = 0.046666
+[e020 s0050/64] loss = 0.041087
+Epoch 020: train_loss = 0.040406  MAE = 72.77  RMSE = 93.87  lr = 1.00e-05  time = 37.3s
+[e021 s0001/64] loss = 0.037297
+[e021 s0050/64] loss = 0.035069
+Epoch 021: train_loss = 0.036127  MAE = 83.14  RMSE = 104.20  lr = 1.00e-05  time = 37.6s
+[e022 s0001/64] loss = 0.034870
+[e022 s0050/64] loss = 0.033663
+Epoch 022: train_loss = 0.032176  MAE = 73.28  RMSE = 94.41  lr = 1.00e-05  time = 37.4s
+[e023 s0001/64] loss = 0.031664
+[e023 s0050/64] loss = 0.026547
+Epoch 023: train_loss = 0.028783  MAE = 84.74  RMSE = 106.23  lr = 1.00e-05  time = 37.4s
+[e024 s0001/64] loss = 0.026111
+[e024 s0050/64] loss = 0.029295
+Epoch 024: train_loss = 0.025903  MAE = 92.67  RMSE = 113.83  lr = 1.00e-05  time = 37.4s
+[e025 s0001/64] loss = 0.023960
+[e025 s0050/64] loss = 0.021377
+Epoch 025: train_loss = 0.023602  MAE = 85.88  RMSE = 107.56  lr = 1.00e-05  time = 37.3s
+[e026 s0001/64] loss = 0.022838
+[e026 s0050/64] loss = 0.021243
+Epoch 026: train_loss = 0.021119  MAE = 79.56  RMSE = 101.78  lr = 1.00e-05  time = 37.5s
+[e027 s0001/64] loss = 0.017627
+[e027 s0050/64] loss = 0.020427
+Epoch 027: train_loss = 0.018917  MAE = 78.57  RMSE = 100.94  lr = 1.00e-05  time = 37.5s
+[e028 s0001/64] loss = 0.016841
+[e028 s0050/64] loss = 0.015225
+Epoch 028: train_loss = 0.017363  MAE = 81.80  RMSE = 104.02  lr = 1.00e-05  time = 37.5s
+[e029 s0001/64] loss = 0.016227
+[e029 s0050/64] loss = 0.013859
+Epoch 029: train_loss = 0.015785  MAE = 78.22  RMSE = 100.81  lr = 1.00e-05  time = 37.7s
+[e030 s0001/64] loss = 0.014909
+[e030 s0050/64] loss = 0.015449
+Epoch 030: train_loss = 0.014552  MAE = 83.48  RMSE = 105.56  lr = 1.00e-05  time = 37.4s
