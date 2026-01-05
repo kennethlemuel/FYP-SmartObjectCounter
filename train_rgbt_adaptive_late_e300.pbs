@@ -1,0 +1,35 @@
+#!/bin/bash
+#PBS -N train_rgbt_adaptive_late_e300
+#PBS -P personal-kenneth0
+#PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
+#PBS -l walltime=24:00:00
+#PBS -j oe
+#PBS -o /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/${PBS_JOBNAME}.o${PBS_JOBID}
+#PBS -e /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/${PBS_JOBNAME}.e${PBS_JOBID}
+
+REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+cd "$REPO" || exit 1
+
+module purge
+module load pytorch/2.6.0-py3-cu11.8
+
+export PYTHONPATH="$REPO:$PYTHONPATH"
+
+python3 -u scripts/train_rgbt.py \
+  --mode adaptive_late \
+  --data_root ./data/RGBT-CC-CVPR2021 \
+  --epochs 300 \
+  --batch_size 16 \
+  --lr 1e-5 \
+  --optimizer adam \
+  --weight_decay 0.0 \
+  --crop_size 256 \
+  --flip_prob 0.5 \
+  --milestones 200,250 \
+  --gamma 0.1 \
+  --img_h 768 \
+  --img_w 1024 \
+  --sigma 15.0 \
+  --num_workers 4 \
+  --amp \
+  --save_dir outputs/rgbt_adaptive_late_e300

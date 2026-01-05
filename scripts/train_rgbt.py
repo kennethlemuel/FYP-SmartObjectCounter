@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -19,7 +19,13 @@ from models.csrnet import CSRNet
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
 from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
-from datasets.rgbt_cc import RGBTCC_RGBDataset, RGBTCC_PairedDataset, RGBTCC_EarlyFusionDataset
+
+from datasets.rgbt_cc import (
+    RGBTCC_RGBDataset,
+    RGBTCC_TDataset,
+    RGBTCC_PairedDataset,
+    RGBTCC_EarlyFusionDataset,
+)
 
 
 def set_seed(s = 42, deterministic = True):
@@ -32,6 +38,12 @@ def set_seed(s = 42, deterministic = True):
         torch.backends.cudnn.deterministic = True
 
 
+def seed_worker(worker_id):
+    wseed = torch.initial_seed() % 2**32
+    random.seed(wseed)
+    np.random.seed(wseed)
+
+
 def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
@@ -42,19 +54,82 @@ def _autocast_device_type(device):
     return "cuda" if device.type == "cuda" else "cpu"
 
 
-class EMA:
-    def __init__(self, model, decay = 0.999):
-        self.decay = decay
-        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items()}
+def _crop_params(h, w, crop):
+    ch = min(crop, h)
+    cw = min(crop, w)
+    if h == ch:
+        y0 = 0
+    else:
+        y0 = random.randint(0, h - ch)
+    if w == cw:
+        x0 = 0
+    else:
+        x0 = random.randint(0, w - cw)
+    return y0, y0 + ch, x0, x0 + cw
 
-    @torch.no_grad()
-    def update(self, model):
-        msd = model.state_dict()
-        for k in self.shadow.keys():
-            self.shadow[k].mul_(self.decay).add_(msd[k], alpha = 1.0 - self.decay)
 
-    def apply_to(self, model):
-        model.load_state_dict(self.shadow, strict = True)
+def _hflip(x):
+    return torch.flip(x, dims = [-1])
+
+
+class TrainAugment(Dataset):
+    def __init__(self, base, mode, crop_size = 256, flip_prob = 0.5):
+        self.base = base
+        self.mode = mode
+        self.crop_size = crop_size
+        self.flip_prob = flip_prob
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        sample = self.base[idx]
+        do_flip = random.random() < self.flip_prob
+
+        if self.mode == "rgb":
+            x_rgb, den, a, b = sample
+            _, h, w = x_rgb.shape
+            y0, y1, x0, x1 = _crop_params(h, w, self.crop_size)
+            x_rgb = x_rgb[:, y0:y1, x0:x1]
+            den = den[:, y0:y1, x0:x1]
+            if do_flip:
+                x_rgb = _hflip(x_rgb)
+                den = _hflip(den)
+            return x_rgb, den, a, b
+
+        if self.mode == "t":
+            x_t, den, a, b = sample
+            _, h, w = x_t.shape
+            y0, y1, x0, x1 = _crop_params(h, w, self.crop_size)
+            x_t = x_t[:, y0:y1, x0:x1]
+            den = den[:, y0:y1, x0:x1]
+            if do_flip:
+                x_t = _hflip(x_t)
+                den = _hflip(den)
+            return x_t, den, a, b
+
+        if self.mode == "early":
+            x4, den, a, b = sample
+            _, h, w = x4.shape
+            y0, y1, x0, x1 = _crop_params(h, w, self.crop_size)
+            x4 = x4[:, y0:y1, x0:x1]
+            den = den[:, y0:y1, x0:x1]
+            if do_flip:
+                x4 = _hflip(x4)
+                den = _hflip(den)
+            return x4, den, a, b
+
+        x_rgb, x_t3, den, a, b = sample
+        _, h, w = x_rgb.shape
+        y0, y1, x0, x1 = _crop_params(h, w, self.crop_size)
+        x_rgb = x_rgb[:, y0:y1, x0:x1]
+        x_t3 = x_t3[:, y0:y1, x0:x1]
+        den = den[:, y0:y1, x0:x1]
+        if do_flip:
+            x_rgb = _hflip(x_rgb)
+            x_t3 = _hflip(x_t3)
+            den = _hflip(den)
+        return x_rgb, x_t3, den, a, b
 
 
 @torch.no_grad()
@@ -71,10 +146,12 @@ def evaluate(model, loader, device, mode):
             pred = model(x_rgb)
 
         elif mode == "t":
-            x_rgb, x_t3, den, _, _ = batch
-            x_t3 = x_t3.to(device, non_blocking = True)
+            x_t, den, _, _ = batch
+            x_t = x_t.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
-            pred = model(x_t3)
+            if x_t.shape[1] == 1:
+                x_t = x_t.repeat(1, 3, 1, 1)
+            pred = model(x_t)
 
         elif mode == "early":
             x4, den, _, _ = batch
@@ -87,6 +164,8 @@ def evaluate(model, loader, device, mode):
             x_rgb = x_rgb.to(device, non_blocking = True)
             x_t3 = x_t3.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
+            if x_t3.shape[1] == 1:
+                x_t3 = x_t3.repeat(1, 3, 1, 1)
             pred = model(x_rgb, x_t3)
 
         if pred.shape[-2:] != den.shape[-2:]:
@@ -112,21 +191,26 @@ def main():
     ap.add_argument("--img_h", type = int, default = 768)
     ap.add_argument("--img_w", type = int, default = 1024)
     ap.add_argument("--sigma", type = float, default = 15.0)
-    ap.add_argument("--epochs", type = int, default = 30)
-    ap.add_argument("--batch_size", type = int, default = 1)
+
+    ap.add_argument("--epochs", type = int, default = 300)
+    ap.add_argument("--batch_size", type = int, default = 16)
     ap.add_argument("--lr", type = float, default = 1e-5)
-    ap.add_argument("--weight_decay", type = float, default = 1e-4)
+    ap.add_argument("--weight_decay", type = float, default = 0.0)
+
     ap.add_argument("--amp", action = "store_true")
     ap.add_argument("--save_dir", required = True)
     ap.add_argument("--num_workers", type = int, default = -1)
     ap.add_argument("--seed", type = int, default = 42)
 
-    ap.add_argument("--clip_grad", type = float, default = 0.5)
-    ap.add_argument("--warmup_epochs", type = int, default = 2)
-    ap.add_argument("--ema_decay", type = float, default = 0.999)
-    ap.add_argument("--plateau_patience", type = int, default = 3)
-    ap.add_argument("--plateau_factor", type = float, default = 0.5)
-    ap.add_argument("--min_lr", type = float, default = 1e-7)
+    ap.add_argument("--crop_size", type = int, default = 256)
+    ap.add_argument("--flip_prob", type = float, default = 0.5)
+
+    ap.add_argument("--clip_grad", type = float, default = 0.0)
+
+    ap.add_argument("--optimizer", choices = ["adam", "adamw"], default = "adam")
+    ap.add_argument("--milestones", type = str, default = "200,250")
+    ap.add_argument("--gamma", type = float, default = 0.1)
+
     args = ap.parse_args()
 
     os.makedirs(args.save_dir, exist_ok = True)
@@ -138,21 +222,30 @@ def main():
     img_size = (args.img_h, args.img_w)
 
     if args.mode == "rgb":
-        train_ds = RGBTCC_RGBDataset(args.data_root, args.split_train, img_size, args.sigma)
-        val_ds = RGBTCC_RGBDataset(args.data_root, args.split_val, img_size, args.sigma)
+        base_train = RGBTCC_RGBDataset(args.data_root, args.split_train, img_size, args.sigma)
+        base_val = RGBTCC_RGBDataset(args.data_root, args.split_val, img_size, args.sigma)
+    elif args.mode == "t":
+        base_train = RGBTCC_TDataset(args.data_root, args.split_train, img_size, args.sigma)
+        base_val = RGBTCC_TDataset(args.data_root, args.split_val, img_size, args.sigma)
     elif args.mode == "early":
-        train_ds = RGBTCC_EarlyFusionDataset(args.data_root, args.split_train, img_size, args.sigma)
-        val_ds = RGBTCC_EarlyFusionDataset(args.data_root, args.split_val, img_size, args.sigma)
+        base_train = RGBTCC_EarlyFusionDataset(args.data_root, args.split_train, img_size, args.sigma)
+        base_val = RGBTCC_EarlyFusionDataset(args.data_root, args.split_val, img_size, args.sigma)
     else:
-        train_ds = RGBTCC_PairedDataset(args.data_root, args.split_train, img_size, args.sigma)
-        val_ds = RGBTCC_PairedDataset(args.data_root, args.split_val, img_size, args.sigma)
+        base_train = RGBTCC_PairedDataset(args.data_root, args.split_train, img_size, args.sigma)
+        base_val = RGBTCC_PairedDataset(args.data_root, args.split_val, img_size, args.sigma)
+
+    train_ds = TrainAugment(base_train, mode = args.mode, crop_size = args.crop_size, flip_prob = args.flip_prob)
+    val_ds = base_val
 
     if args.num_workers < 0:
-        workers = 2 if device.type == "cuda" else 0
+        workers = 4 if device.type == "cuda" else 0
     else:
         workers = args.num_workers
 
     pin = (device.type == "cuda") and (workers > 0)
+
+    g = torch.Generator()
+    g.manual_seed(args.seed)
 
     train_dl = DataLoader(
         train_ds,
@@ -160,18 +253,20 @@ def main():
         shuffle = True,
         num_workers = workers,
         pin_memory = pin,
-        drop_last = False,
+        drop_last = True,
+        worker_init_fn = seed_worker,
+        generator = g,
     )
     val_dl = DataLoader(
         val_ds,
         batch_size = 1,
         shuffle = False,
-        num_workers = workers,
-        pin_memory = pin,
+        num_workers = workers if device.type == "cuda" else 0,
+        pin_memory = (device.type == "cuda"),
         drop_last = False,
     )
 
-    print(f"[init] train = {len(train_ds)}  val = {len(val_ds)}  workers = {workers}")
+    print(f"[init] train = {len(base_train)}  val = {len(base_val)}  workers = {workers}")
 
     if args.mode in ["rgb", "t"]:
         model = CSRNet(load_imagenet = True).to(device)
@@ -182,33 +277,24 @@ def main():
     else:
         model = CSRNetRGBT_AdaptiveLate(load_imagenet = True).to(device)
 
-    optim = torch.optim.AdamW(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
+    if args.optimizer == "adam":
+        optim = torch.optim.Adam(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
+    else:
+        optim = torch.optim.AdamW(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
+
     mse = nn.MSELoss()
 
     scaler = torch.amp.GradScaler("cuda", enabled = (args.amp and device.type == "cuda"))
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optim,
-        mode = "min",
-        factor = args.plateau_factor,
-        patience = args.plateau_patience,
-        min_lr = args.min_lr,
-    )
-
-    ema = EMA(model, decay = args.ema_decay) if args.ema_decay and args.ema_decay > 0 else None
+    ms = [int(x.strip()) for x in args.milestones.split(",") if x.strip()]
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optim, milestones = ms, gamma = args.gamma)
 
     best_mae = float("inf")
-    base_lr = args.lr
 
     for ep in range(1, args.epochs + 1):
         model.train()
         run_loss = 0.0
         t0 = time.time()
-
-        if args.warmup_epochs > 0 and ep <= args.warmup_epochs:
-            lr_w = base_lr * (ep / float(args.warmup_epochs))
-            for pg in optim.param_groups:
-                pg["lr"] = lr_w
 
         for step, batch in enumerate(train_dl, 1):
             optim.zero_grad(set_to_none = True)
@@ -224,10 +310,12 @@ def main():
                     pred = model(x_rgb)
 
                 elif args.mode == "t":
-                    x_rgb, x_t3, den, _, _ = batch
-                    x_t3 = x_t3.to(device, non_blocking = True)
+                    x_t, den, _, _ = batch
+                    x_t = x_t.to(device, non_blocking = True)
                     den = den.to(device, non_blocking = True)
-                    pred = model(x_t3)
+                    if x_t.shape[1] == 1:
+                        x_t = x_t.repeat(1, 3, 1, 1)
+                    pred = model(x_t)
 
                 elif args.mode == "early":
                     x4, den, _, _ = batch
@@ -240,6 +328,8 @@ def main():
                     x_rgb = x_rgb.to(device, non_blocking = True)
                     x_t3 = x_t3.to(device, non_blocking = True)
                     den = den.to(device, non_blocking = True)
+                    if x_t3.shape[1] == 1:
+                        x_t3 = x_t3.repeat(1, 3, 1, 1)
                     pred = model(x_rgb, x_t3)
 
                 if pred.shape[-2:] != den.shape[-2:]:
@@ -256,25 +346,15 @@ def main():
             scaler.step(optim)
             scaler.update()
 
-            if ema is not None:
-                ema.update(model)
-
             run_loss += float(loss.item())
 
             if step == 1 or step % 50 == 0:
-                print(f"[e{ep:02d} s{step:04d}/{len(train_dl)}] loss = {loss.item():.4f}")
+                print(f"[e{ep:03d} s{step:04d}/{len(train_dl)}] loss = {loss.item():.6f}")
 
         train_loss = run_loss / max(1, len(train_dl))
+        val_mae, val_rmse = evaluate(model, val_dl, device, args.mode)
 
-        if ema is not None:
-            backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
-            ema.apply_to(model)
-            val_mae, val_rmse = evaluate(model, val_dl, device, args.mode)
-            model.load_state_dict(backup, strict = True)
-        else:
-            val_mae, val_rmse = evaluate(model, val_dl, device, args.mode)
-
-        scheduler.step(val_mae)
+        scheduler.step()
 
         torch.save(
             {
@@ -303,7 +383,7 @@ def main():
 
         dt = time.time() - t0
         print(
-            f"Epoch {ep:02d}: train_loss = {train_loss:.4f}  MAE = {val_mae:.2f}  RMSE = {val_rmse:.2f}  "
+            f"Epoch {ep:03d}: train_loss = {train_loss:.6f}  MAE = {val_mae:.2f}  RMSE = {val_rmse:.2f}  "
             f"lr = {optim.param_groups[0]['lr']:.2e}  time = {dt:.1f}s"
         )
 
