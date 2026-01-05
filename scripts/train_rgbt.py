@@ -27,6 +27,8 @@ from datasets.rgbt_cc import (
     RGBTCC_EarlyFusionDataset,
 )
 
+OUT_STRIDE = 8
+
 
 def set_seed(s = 42, deterministic = True):
     random.seed(s)
@@ -54,86 +56,120 @@ def _autocast_device_type(device):
     return "cuda" if device.type == "cuda" else "cpu"
 
 
-def _crop_params(h, w, crop):
-    ch = min(crop, h)
-    cw = min(crop, w)
-    if h == ch:
-        y0 = 0
-    else:
-        y0 = random.randint(0, h - ch)
-    if w == cw:
-        x0 = 0
-    else:
-        x0 = random.randint(0, w - cw)
-    return y0, y0 + ch, x0, x0 + cw
-
-
 def _hflip(x):
     return torch.flip(x, dims = [-1])
 
 
-def _to_resizable(x):
+def _make_resizable(x):
     return x.contiguous().clone()
 
 
+def _crop_params(h, w, crop, stride = OUT_STRIDE):
+    ch = min(crop, h)
+    cw = min(crop, w)
+
+    ch = max(stride, (ch // stride) * stride)
+    cw = max(stride, (cw // stride) * stride)
+
+    max_y0 = h - ch
+    max_x0 = w - cw
+
+    if max_y0 <= 0:
+        y0 = 0
+    else:
+        y0 = random.randint(0, max_y0 // stride) * stride
+
+    if max_x0 <= 0:
+        x0 = 0
+    else:
+        x0 = random.randint(0, max_x0 // stride) * stride
+
+    return y0, y0 + ch, x0, x0 + cw
+
+
 class TrainAugment(Dataset):
-    def __init__(self, base, mode, crop_size = 256, flip_prob = 0.5):
+    def __init__(self, base, mode, crop_size = 256, flip_prob = 0.5, stride = OUT_STRIDE):
         self.base = base
         self.mode = mode
         self.crop_size = crop_size
         self.flip_prob = flip_prob
+        self.stride = stride
 
     def __len__(self):
         return len(self.base)
 
     def __getitem__(self, idx):
         sample = self.base[idx]
-        do_flip = random.random() < self.flip_prob
+        do_flip = (random.random() < self.flip_prob)
 
         if self.mode == "rgb":
             x_rgb, den, a, b = sample
             _, h, w = x_rgb.shape
-            y0, y1, x0, x1 = _crop_params(h, w, self.crop_size)
+            y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
+
+            y0d, y1d = y0 // self.stride, y1 // self.stride
+            x0d, x1d = x0 // self.stride, x1 // self.stride
+
             x_rgb = x_rgb[:, y0:y1, x0:x1]
-            den = den[:, y0:y1, x0:x1]
+            den = den[:, y0d:y1d, x0d:x1d]
+
             if do_flip:
                 x_rgb = _hflip(x_rgb)
                 den = _hflip(den)
-            return _to_resizable(x_rgb), _to_resizable(den), a, b
+
+            return _make_resizable(x_rgb), _make_resizable(den), a, b
 
         if self.mode == "t":
             x_t, den, a, b = sample
             _, h, w = x_t.shape
-            y0, y1, x0, x1 = _crop_params(h, w, self.crop_size)
+            y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
+
+            y0d, y1d = y0 // self.stride, y1 // self.stride
+            x0d, x1d = x0 // self.stride, x1 // self.stride
+
             x_t = x_t[:, y0:y1, x0:x1]
-            den = den[:, y0:y1, x0:x1]
+            den = den[:, y0d:y1d, x0d:x1d]
+
             if do_flip:
                 x_t = _hflip(x_t)
                 den = _hflip(den)
-            return _to_resizable(x_t), _to_resizable(den), a, b
+
+            return _make_resizable(x_t), _make_resizable(den), a, b
 
         if self.mode == "early":
             x4, den, a, b = sample
             _, h, w = x4.shape
-            y0, y1, x0, x1 = _crop_params(h, w, self.crop_size)
+            y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
+
+            y0d, y1d = y0 // self.stride, y1 // self.stride
+            x0d, x1d = x0 // self.stride, x1 // self.stride
+
             x4 = x4[:, y0:y1, x0:x1]
-            den = den[:, y0:y1, x0:x1]
+            den = den[:, y0d:y1d, x0d:x1d]
+
             if do_flip:
                 x4 = _hflip(x4)
                 den = _hflip(den)
-            return _to_resizable(x4), _to_resizable(den), a, b
+
+            return _make_resizable(x4), _make_resizable(den), a, b
 
         x_rgb, x_t3, den, a, b = sample
         _, h, w = x_rgb.shape
-        y0, y1, x0, x1 = _crop_params(h, w, self.crop_size)
+        y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
+
+        y0d, y1d = y0 // self.stride, y1 // self.stride
+        x0d, x1d = x0 // self.stride, x1 // self.stride
+
         x_rgb = x_rgb[:, y0:y1, x0:x1]
         x_t3 = x_t3[:, y0:y1, x0:x1]
-        den = den[:, y0:y1, x0:x1]
+        den = den[:, y0d:y1d, x0d:x1d]
+
         if do_flip:
             x_rgb = _hflip(x_rgb)
             x_t3 = _hflip(x_t3)
             den = _hflip(den)
-        return _to_resizable(x_rgb), _to_resizable(x_t3), _to_resizable(den), a, b
+
+        return _make_resizable(x_rgb), _make_resizable(x_t3), _make_resizable(den), a, b
 
 
 @torch.no_grad()
@@ -287,7 +323,6 @@ def main():
         optim = torch.optim.AdamW(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
 
     mse = nn.MSELoss()
-
     scaler = torch.amp.GradScaler("cuda", enabled = (args.amp and device.type == "cuda"))
 
     ms = [int(x.strip()) for x in args.milestones.split(",") if x.strip()]
