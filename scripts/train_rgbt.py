@@ -39,7 +39,7 @@ def set_seed(s = 42, deterministic = True):
 
 
 def seed_worker(worker_id):
-    wseed = torch.initial_seed() % 2**32
+    wseed = torch.initial_seed() % (2**32)
     random.seed(wseed)
     np.random.seed(wseed)
 
@@ -72,6 +72,10 @@ def _hflip(x):
     return torch.flip(x, dims = [-1])
 
 
+def _to_resizable(x):
+    return x.contiguous().clone()
+
+
 class TrainAugment(Dataset):
     def __init__(self, base, mode, crop_size = 256, flip_prob = 0.5):
         self.base = base
@@ -95,7 +99,7 @@ class TrainAugment(Dataset):
             if do_flip:
                 x_rgb = _hflip(x_rgb)
                 den = _hflip(den)
-            return x_rgb, den, a, b
+            return _to_resizable(x_rgb), _to_resizable(den), a, b
 
         if self.mode == "t":
             x_t, den, a, b = sample
@@ -106,7 +110,7 @@ class TrainAugment(Dataset):
             if do_flip:
                 x_t = _hflip(x_t)
                 den = _hflip(den)
-            return x_t, den, a, b
+            return _to_resizable(x_t), _to_resizable(den), a, b
 
         if self.mode == "early":
             x4, den, a, b = sample
@@ -117,7 +121,7 @@ class TrainAugment(Dataset):
             if do_flip:
                 x4 = _hflip(x4)
                 den = _hflip(den)
-            return x4, den, a, b
+            return _to_resizable(x4), _to_resizable(den), a, b
 
         x_rgb, x_t3, den, a, b = sample
         _, h, w = x_rgb.shape
@@ -129,7 +133,7 @@ class TrainAugment(Dataset):
             x_rgb = _hflip(x_rgb)
             x_t3 = _hflip(x_t3)
             den = _hflip(den)
-        return x_rgb, x_t3, den, a, b
+        return _to_resizable(x_rgb), _to_resizable(x_t3), _to_resizable(den), a, b
 
 
 @torch.no_grad()

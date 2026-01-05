@@ -11,7 +11,7 @@ from scipy.io import loadmat
 OUT_STRIDE = 8
 
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
-_IMAGENET_STD  = [0.229, 0.224, 0.225]
+_IMAGENET_STD = [0.229, 0.224, 0.225]
 
 _tf_rgb = transforms.Compose([
     transforms.ToTensor(),
@@ -35,6 +35,11 @@ def _pick_existing(path_no_ext, exts):
         if os.path.exists(p):
             return p
     return None
+
+
+def _den_to_tensor(den_hw):
+    den_hw = np.ascontiguousarray(den_hw.astype(np.float32, copy = False))
+    return torch.tensor(den_hw, dtype = torch.float32).unsqueeze(0).contiguous()
 
 
 def density_from_points(points_xy, h, w, sigma = 15.0):
@@ -148,7 +153,9 @@ class RGBTCC_RGBDataset(Dataset):
         if gt_count > 0 and s > 0:
             den *= (gt_count / s)
 
-        return _tf_rgb(rgb_res), torch.from_numpy(den).unsqueeze(0), f"{sid}.jpg", gt_count
+        rgb_t = _tf_rgb(rgb_res).contiguous()
+        den_t = _den_to_tensor(den)
+        return rgb_t, den_t, f"{sid}.jpg", gt_count
 
 
 class RGBTCC_TDataset(Dataset):
@@ -209,8 +216,8 @@ class RGBTCC_TDataset(Dataset):
         if gt_count > 0 and s > 0:
             den *= (gt_count / s)
 
-        t3_t = _tf_t3(t3_r)
-        den_t = torch.from_numpy(den).unsqueeze(0)
+        t3_t = _tf_t3(t3_r).contiguous()
+        den_t = _den_to_tensor(den)
         return t3_t, den_t, f"{sid}.jpg", gt_count
 
 
@@ -279,9 +286,9 @@ class RGBTCC_PairedDataset(Dataset):
         if gt_count > 0 and s > 0:
             den *= (gt_count / s)
 
-        rgb_t = _tf_rgb(rgb_r)
-        t3_t = _tf_t3(t3_r)
-        den_t = torch.from_numpy(den).unsqueeze(0)
+        rgb_t = _tf_rgb(rgb_r).contiguous()
+        t3_t = _tf_t3(t3_r).contiguous()
+        den_t = _den_to_tensor(den)
 
         return rgb_t, t3_t, den_t, f"{sid}.jpg", gt_count
 
@@ -350,8 +357,9 @@ class RGBTCC_EarlyFusionDataset(Dataset):
         if gt_count > 0 and s > 0:
             den *= (gt_count / s)
 
-        rgb_t = _tf_rgb(rgb_r)
-        t1_t = _tf_t1(t1_r)[0:1, :, :]
-        x4 = torch.cat([rgb_t, t1_t], dim = 0)
+        rgb_t = _tf_rgb(rgb_r).contiguous()
+        t1_t = _tf_t1(t1_r)[0:1, :, :].contiguous()
+        x4 = torch.cat([rgb_t, t1_t], dim = 0).contiguous()
 
-        return x4, torch.from_numpy(den).unsqueeze(0), f"{sid}.jpg", gt_count
+        den_t = _den_to_tensor(den)
+        return x4, den_t, f"{sid}.jpg", gt_count
