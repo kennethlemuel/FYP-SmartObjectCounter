@@ -87,6 +87,100 @@ def _crop_params(h, w, crop, stride = OUT_STRIDE):
     return y0, y0 + ch, x0, x0 + cw
 
 
+def _set_requires_grad(module, flag):
+    for p in module.parameters():
+        p.requires_grad = flag
+
+
+def _game(pred, gt, level = 0):
+    """
+    GAME(L): Grid Average Mean absolute Error.
+    GAME(0) is identical to MAE (per-image absolute count error).
+
+    pred, gt: (B,1,H,W) density maps
+    """
+    b, _, h, w = pred.shape
+    g = 2 ** int(level)
+
+    # make divisible by grid by cropping (deterministic)
+    h2 = (h // g) * g
+    w2 = (w // g) * g
+    if h2 == 0 or w2 == 0:
+        # fallback: treat as GAME(0)
+        c_pred = pred.sum(dim = (-2, -1)).view(-1)
+        c_gt = gt.sum(dim = (-2, -1)).view(-1)
+        return (c_pred - c_gt).abs().mean().item()
+
+    pred = pred[:, :, :h2, :w2]
+    gt = gt[:, :, :h2, :w2]
+
+    hc = h2 // g
+    wc = w2 // g
+
+    pred_cells = pred.view(b, 1, g, hc, g, wc).sum(dim = (3, 5))  # (B,1,g,g)
+    gt_cells = gt.view(b, 1, g, hc, g, wc).sum(dim = (3, 5))      # (B,1,g,g)
+
+    err = (pred_cells - gt_cells).abs().view(b, -1).mean(dim = 1)  # avg over cells
+    return err.mean().item()
+
+
+@torch.no_grad()
+def evaluate(model, loader, device, mode, game_levels = (0, 1, 2, 3)):
+    model.eval()
+    rmse_acc = 0.0
+    mae_acc = 0.0
+    game_acc = {L: 0.0 for L in game_levels}
+
+    for batch in loader:
+        if mode == "rgb":
+            x_rgb, den, _, _ = batch
+            x_rgb = x_rgb.to(device, non_blocking = True)
+            den = den.to(device, non_blocking = True)
+            pred = model(x_rgb)
+
+        elif mode == "t":
+            x_t, den, _, _ = batch
+            x_t = x_t.to(device, non_blocking = True)
+            den = den.to(device, non_blocking = True)
+            if x_t.shape[1] == 1:
+                x_t = x_t.repeat(1, 3, 1, 1)
+            pred = model(x_t)
+
+        elif mode == "early":
+            x4, den, _, _ = batch
+            x4 = x4.to(device, non_blocking = True)
+            den = den.to(device, non_blocking = True)
+            pred = model(x4)
+
+        else:
+            x_rgb, x_t3, den, _, _ = batch
+            x_rgb = x_rgb.to(device, non_blocking = True)
+            x_t3 = x_t3.to(device, non_blocking = True)
+            den = den.to(device, non_blocking = True)
+            if x_t3.shape[1] == 1:
+                x_t3 = x_t3.repeat(1, 3, 1, 1)
+            pred = model(x_rgb, x_t3)
+
+        if pred.shape[-2:] != den.shape[-2:]:
+            den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
+
+        c_pred = float(pred.sum().item())
+        c_gt = float(den.sum().item())
+        err = (c_pred - c_gt)
+
+        mae_acc += abs(err)
+        rmse_acc += err ** 2
+
+        for L in game_levels:
+            game_acc[L] += _game(pred, den, level = L)
+
+    n = max(1, len(loader))
+    mae = mae_acc / n
+    rmse = math.sqrt(rmse_acc / n)
+    games = {L: game_acc[L] / n for L in game_levels}
+    return mae, rmse, games
+
+
 class MakeResizable(Dataset):
     def __init__(self, base):
         self.base = base
@@ -106,7 +200,7 @@ class MakeResizable(Dataset):
 
 
 class TrainAugment(Dataset):
-    def __init__(self, base, mode, crop_size = 256, flip_prob = 0.5, stride = OUT_STRIDE):
+    def __init__(self, base, mode, crop_size = 224, flip_prob = 0.5, stride = OUT_STRIDE):
         self.base = base
         self.mode = mode
         self.crop_size = crop_size
@@ -190,58 +284,9 @@ class TrainAugment(Dataset):
         return _make_resizable(x_rgb), _make_resizable(x_t3), _make_resizable(den), a, b
 
 
-@torch.no_grad()
-def evaluate(model, loader, device, mode):
-    model.eval()
-    mae = 0.0
-    rmse = 0.0
-
-    for batch in loader:
-        if mode == "rgb":
-            x_rgb, den, _, _ = batch
-            x_rgb = x_rgb.to(device, non_blocking = True)
-            den = den.to(device, non_blocking = True)
-            pred = model(x_rgb)
-
-        elif mode == "t":
-            x_t, den, _, _ = batch
-            x_t = x_t.to(device, non_blocking = True)
-            den = den.to(device, non_blocking = True)
-            if x_t.shape[1] == 1:
-                x_t = x_t.repeat(1, 3, 1, 1)
-            pred = model(x_t)
-
-        elif mode == "early":
-            x4, den, _, _ = batch
-            x4 = x4.to(device, non_blocking = True)
-            den = den.to(device, non_blocking = True)
-            pred = model(x4)
-
-        else:
-            x_rgb, x_t3, den, _, _ = batch
-            x_rgb = x_rgb.to(device, non_blocking = True)
-            x_t3 = x_t3.to(device, non_blocking = True)
-            den = den.to(device, non_blocking = True)
-            if x_t3.shape[1] == 1:
-                x_t3 = x_t3.repeat(1, 3, 1, 1)
-            pred = model(x_rgb, x_t3)
-
-        if pred.shape[-2:] != den.shape[-2:]:
-            den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
-
-        c_pred = float(pred.sum().item())
-        c_gt = float(den.sum().item())
-        mae += abs(c_pred - c_gt)
-        rmse += (c_pred - c_gt) ** 2
-
-    n = max(1, len(loader))
-    mae /= n
-    rmse = math.sqrt(rmse / n)
-    return mae, rmse
-
-
 def main():
     ap = argparse.ArgumentParser()
+
     ap.add_argument("--mode", choices = ["rgb", "t", "early", "late", "adaptive_late"], required = True)
     ap.add_argument("--data_root", required = True)
     ap.add_argument("--split_train", default = "train")
@@ -250,24 +295,31 @@ def main():
     ap.add_argument("--img_w", type = int, default = 1024)
     ap.add_argument("--sigma", type = float, default = 15.0)
 
-    ap.add_argument("--epochs", type = int, default = 300)
-    ap.add_argument("--batch_size", type = int, default = 16)
+    # ECCV'24 protocol uses: Adam, lr 1e-5, wd 1e-4, crop 224, batch 1, 400 epochs.
+    ap.add_argument("--epochs", type = int, default = 400)
+    ap.add_argument("--batch_size", type = int, default = 1)
+    ap.add_argument("--grad_accum", type = int, default = 16, help = "Accumulate gradients to simulate a larger batch.")
     ap.add_argument("--lr", type = float, default = 1e-5)
-    ap.add_argument("--weight_decay", type = float, default = 0.0)
+    ap.add_argument("--gate_lr", type = float, default = 1e-4, help = "Only used for adaptive_late gate params.")
+    ap.add_argument("--weight_decay", type = float, default = 1e-4)
 
     ap.add_argument("--amp", action = "store_true")
     ap.add_argument("--save_dir", required = True)
     ap.add_argument("--num_workers", type = int, default = -1)
     ap.add_argument("--seed", type = int, default = 42)
 
-    ap.add_argument("--crop_size", type = int, default = 256)
+    ap.add_argument("--crop_size", type = int, default = 224)
     ap.add_argument("--flip_prob", type = float, default = 0.5)
 
     ap.add_argument("--clip_grad", type = float, default = 0.0)
 
     ap.add_argument("--optimizer", choices = ["adam", "adamw"], default = "adam")
-    ap.add_argument("--milestones", type = str, default = "200,250")
+
+    ap.add_argument("--scheduler", choices = ["none", "multistep"], default = "none")
+    ap.add_argument("--milestones", type = str, default = "200,300")
     ap.add_argument("--gamma", type = float, default = 0.1)
+
+    ap.add_argument("--freeze_backbones_epochs", type = int, default = 0, help = "For adaptive_late: freeze rgb/t nets for first N epochs.")
 
     args = ap.parse_args()
 
@@ -335,26 +387,23 @@ def main():
     else:
         model = CSRNetRGBT_AdaptiveLate(load_imagenet = True).to(device)
 
-    # ---- FIX: adaptive_late gate learns faster than the backbones ----
+    # Optimizer (with a faster LR for the gate in adaptive_late)
     if args.mode == "adaptive_late":
-        if not hasattr(model, "gate"):
-            raise RuntimeError("adaptive_late model must have attribute `gate` (nn.Module)")
-
+        backbone_params = list(model.rgb_net.parameters()) + list(model.t_net.parameters())
         gate_params = list(model.gate.parameters())
-        backbone_params = [p for n, p in model.named_parameters() if not n.startswith("gate.")]
 
         if args.optimizer == "adam":
             optim = torch.optim.Adam(
                 [
                     {"params": backbone_params, "lr": args.lr, "weight_decay": args.weight_decay},
-                    {"params": gate_params, "lr": args.lr * 10.0, "weight_decay": 0.0},
+                    {"params": gate_params, "lr": args.gate_lr, "weight_decay": args.weight_decay},
                 ]
             )
         else:
             optim = torch.optim.AdamW(
                 [
                     {"params": backbone_params, "lr": args.lr, "weight_decay": args.weight_decay},
-                    {"params": gate_params, "lr": args.lr * 10.0, "weight_decay": 0.0},
+                    {"params": gate_params, "lr": args.gate_lr, "weight_decay": args.weight_decay},
                 ]
             )
     else:
@@ -362,24 +411,33 @@ def main():
             optim = torch.optim.Adam(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
         else:
             optim = torch.optim.AdamW(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
-    # ---------------------------------------------------------------
 
     mse = nn.MSELoss()
     scaler = torch.amp.GradScaler("cuda", enabled = (args.amp and device.type == "cuda"))
 
-    ms = [int(x.strip()) for x in args.milestones.split(",") if x.strip()]
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optim, milestones = ms, gamma = args.gamma)
+    if args.scheduler == "multistep":
+        ms = [int(x.strip()) for x in args.milestones.split(",") if x.strip()]
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optim, milestones = ms, gamma = args.gamma)
+    else:
+        scheduler = None
 
     best_mae = float("inf")
 
     for ep in range(1, args.epochs + 1):
         model.train()
+
+        if args.mode == "adaptive_late" and args.freeze_backbones_epochs > 0:
+            freeze = (ep <= args.freeze_backbones_epochs)
+            _set_requires_grad(model.rgb_net, not freeze)
+            _set_requires_grad(model.t_net, not freeze)
+            _set_requires_grad(model.gate, True)
+
         run_loss = 0.0
         t0 = time.time()
 
-        for step, batch in enumerate(train_dl, 1):
-            optim.zero_grad(set_to_none = True)
+        optim.zero_grad(set_to_none = True)
 
+        for step, batch in enumerate(train_dl, 1):
             with torch.amp.autocast(
                 device_type = _autocast_device_type(device),
                 enabled = (args.amp and device.type == "cuda"),
@@ -416,26 +474,38 @@ def main():
                 if pred.shape[-2:] != den.shape[-2:]:
                     den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
 
-                loss = mse(pred, den)
+                loss = mse(pred, den) / max(1, args.grad_accum)
 
             scaler.scale(loss).backward()
+            run_loss += float(loss.item()) * max(1, args.grad_accum)
 
+            do_step = (step % max(1, args.grad_accum) == 0)
+            if do_step:
+                if args.clip_grad and args.clip_grad > 0:
+                    scaler.unscale_(optim)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = args.clip_grad)
+
+                scaler.step(optim)
+                scaler.update()
+                optim.zero_grad(set_to_none = True)
+
+            if step == 1 or step % 50 == 0:
+                print(f"[e{ep:03d} s{step:04d}/{len(train_dl)}] loss = {run_loss / step:.6f}")
+
+        # leftover grads if not divisible by grad_accum
+        if len(train_dl) % max(1, args.grad_accum) != 0:
             if args.clip_grad and args.clip_grad > 0:
                 scaler.unscale_(optim)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = args.clip_grad)
-
             scaler.step(optim)
             scaler.update()
-
-            run_loss += float(loss.item())
-
-            if step == 1 or step % 50 == 0:
-                print(f"[e{ep:03d} s{step:04d}/{len(train_dl)}] loss = {loss.item():.6f}")
+            optim.zero_grad(set_to_none = True)
 
         train_loss = run_loss / max(1, len(train_dl))
-        val_mae, val_rmse = evaluate(model, val_dl, device, args.mode)
+        val_mae, val_rmse, val_game = evaluate(model, val_dl, device, args.mode)
 
-        scheduler.step()
+        if scheduler is not None:
+            scheduler.step()
 
         torch.save(
             {
@@ -443,6 +513,7 @@ def main():
                 "model": model.state_dict(),
                 "val_mae": val_mae,
                 "val_rmse": val_rmse,
+                "val_game": val_game,
                 "lr": optim.param_groups[0]["lr"],
             },
             os.path.join(args.save_dir, f"{args.mode}_last.pth")
@@ -456,16 +527,24 @@ def main():
                     "model": model.state_dict(),
                     "val_mae": val_mae,
                     "val_rmse": val_rmse,
+                    "val_game": val_game,
                     "lr": optim.param_groups[0]["lr"],
                 },
                 os.path.join(args.save_dir, f"{args.mode}_best.pth")
             )
-            print(f"-> saved {args.mode}_best.pth (MAE {val_mae:.2f})")
+            print(f"-> saved {args.mode}_best.pth (MAE/GAME0 {val_mae:.2f})")
 
         dt = time.time() - t0
+        g1 = val_game.get(1, float("nan"))
+        g2 = val_game.get(2, float("nan"))
+        g3 = val_game.get(3, float("nan"))
+        lr0 = optim.param_groups[0]["lr"]
+
         print(
-            f"Epoch {ep:03d}: train_loss = {train_loss:.6f}  MAE = {val_mae:.2f}  RMSE = {val_rmse:.2f}  "
-            f"lr = {optim.param_groups[0]['lr']:.2e}  time = {dt:.1f}s"
+            f"Epoch {ep:03d}: train_loss = {train_loss:.6f}  "
+            f"MAE/GAME0 = {val_mae:.2f}  RMSE = {val_rmse:.2f}  "
+            f"GAME1 = {g1:.2f}  GAME2 = {g2:.2f}  GAME3 = {g3:.2f}  "
+            f"lr = {lr0:.2e}  time = {dt:.1f}s"
         )
 
 
