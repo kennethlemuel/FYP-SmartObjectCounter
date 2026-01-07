@@ -2,7 +2,7 @@
 #PBS -N train_rgbt_adaptive_late_e30
 #PBS -P personal-kenneth0
 #PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
-#PBS -l walltime=06:00:00
+#PBS -l walltime=12:00:00
 #PBS -j oe
 #PBS -o /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/
 #PBS -e /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/
@@ -21,4 +21,14 @@ python3 -u scripts/train_rgbt.py \
   --epochs 30 \
   --batch_size 1 \
   --lr 1e-5 \
-  --save_dir outputs/rgbt_adaptive_late_e30
+  --optimizer adam \
+  --weight_decay 1e-4 \
+  --crop_size 224 \
+  --flip_prob 0.5 \
+  --scheduler none \
+  --img_h 768 \
+  --img_w 1024 \
+  --sigma 15.0 \
+  --num_workers 4 \
+  --amp \
+  --save_dir outputs/rgbt_adaptive_late_e30_bs1_crop224
