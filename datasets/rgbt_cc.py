@@ -96,11 +96,12 @@ def _to_t3(img_any):
 
 
 class RGBTCC_RGBDataset(Dataset):
-    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None):
+    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None, return_pts = False):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
         self.h, self.w = img_size
         self.sigma = sigma
+        self.return_pts = return_pts
 
         names = [f for f in os.listdir(self.split_dir) if f.endswith("_RGB.jpg") or f.endswith("_RGB.png")]
         ids = sorted({n.replace("_RGB.jpg", "").replace("_RGB.png", "") for n in names})
@@ -155,15 +156,21 @@ class RGBTCC_RGBDataset(Dataset):
 
         rgb_t = _tf_rgb(rgb_res).contiguous()
         den_t = _den_to_tensor(den)
+
+        if self.return_pts:
+            pts_out_t = torch.from_numpy(pts_out.astype(np.float32, copy = False)).contiguous()
+            return rgb_t, den_t, pts_out_t, f"{sid}.jpg", gt_count
+
         return rgb_t, den_t, f"{sid}.jpg", gt_count
 
 
 class RGBTCC_TDataset(Dataset):
-    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None):
+    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None, return_pts = False):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
         self.h, self.w = img_size
         self.sigma = sigma
+        self.return_pts = return_pts
 
         names = [f for f in os.listdir(self.split_dir) if f.endswith("_T.jpg") or f.endswith("_T.png")]
         ids = sorted({n.replace("_T.jpg", "").replace("_T.png", "") for n in names})
@@ -218,15 +225,21 @@ class RGBTCC_TDataset(Dataset):
 
         t3_t = _tf_t3(t3_r).contiguous()
         den_t = _den_to_tensor(den)
+
+        if self.return_pts:
+            pts_out_t = torch.from_numpy(pts_out.astype(np.float32, copy = False)).contiguous()
+            return t3_t, den_t, pts_out_t, f"{sid}.jpg", gt_count
+
         return t3_t, den_t, f"{sid}.jpg", gt_count
 
 
 class RGBTCC_PairedDataset(Dataset):
-    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None):
+    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None, return_pts = False):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
         self.h, self.w = img_size
         self.sigma = sigma
+        self.return_pts = return_pts
 
         names = [f for f in os.listdir(self.split_dir) if f.endswith("_RGB.jpg") or f.endswith("_RGB.png")]
         ids = sorted({n.replace("_RGB.jpg", "").replace("_RGB.png", "") for n in names})
@@ -290,15 +303,20 @@ class RGBTCC_PairedDataset(Dataset):
         t3_t = _tf_t3(t3_r).contiguous()
         den_t = _den_to_tensor(den)
 
+        if self.return_pts:
+            pts_out_t = torch.from_numpy(pts_out.astype(np.float32, copy = False)).contiguous()
+            return rgb_t, t3_t, den_t, pts_out_t, f"{sid}.jpg", gt_count
+
         return rgb_t, t3_t, den_t, f"{sid}.jpg", gt_count
 
 
 class RGBTCC_EarlyFusionDataset(Dataset):
-    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None):
+    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None, return_pts = False):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
         self.h, self.w = img_size
         self.sigma = sigma
+        self.return_pts = return_pts
 
         names = [f for f in os.listdir(self.split_dir) if f.endswith("_RGB.jpg") or f.endswith("_RGB.png")]
         ids = sorted({n.replace("_RGB.jpg", "").replace("_RGB.png", "") for n in names})
@@ -362,4 +380,9 @@ class RGBTCC_EarlyFusionDataset(Dataset):
         x4 = torch.cat([rgb_t, t1_t], dim = 0).contiguous()
 
         den_t = _den_to_tensor(den)
+
+        if self.return_pts:
+            pts_out_t = torch.from_numpy(pts_out.astype(np.float32, copy = False)).contiguous()
+            return x4, den_t, pts_out_t, f"{sid}.jpg", gt_count
+
         return x4, den_t, f"{sid}.jpg", gt_count

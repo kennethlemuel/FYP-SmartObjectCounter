@@ -25,6 +25,7 @@ from datasets.rgbt_cc import (
     RGBTCC_TDataset,
     RGBTCC_PairedDataset,
     RGBTCC_EarlyFusionDataset,
+    density_from_points,  # <-- make sure this is importable
 )
 
 OUT_STRIDE = 8
@@ -74,15 +75,8 @@ def _crop_params(h, w, crop, stride = OUT_STRIDE):
     max_y0 = h - ch
     max_x0 = w - cw
 
-    if max_y0 <= 0:
-        y0 = 0
-    else:
-        y0 = random.randint(0, max_y0 // stride) * stride
-
-    if max_x0 <= 0:
-        x0 = 0
-    else:
-        x0 = random.randint(0, max_x0 // stride) * stride
+    y0 = 0 if max_y0 <= 0 else random.randint(0, max_y0 // stride) * stride
+    x0 = 0 if max_x0 <= 0 else random.randint(0, max_x0 // stride) * stride
 
     return y0, y0 + ch, x0, x0 + cw
 
@@ -93,20 +87,12 @@ def _set_requires_grad(module, flag):
 
 
 def _game(pred, gt, level = 0):
-    """
-    GAME(L): Grid Average Mean absolute Error.
-    GAME(0) is identical to MAE (per-image absolute count error).
-
-    pred, gt: (B,1,H,W) density maps
-    """
     b, _, h, w = pred.shape
     g = 2 ** int(level)
 
-    # make divisible by grid by cropping (deterministic)
     h2 = (h // g) * g
     w2 = (w // g) * g
     if h2 == 0 or w2 == 0:
-        # fallback: treat as GAME(0)
         c_pred = pred.sum(dim = (-2, -1)).view(-1)
         c_gt = gt.sum(dim = (-2, -1)).view(-1)
         return (c_pred - c_gt).abs().mean().item()
@@ -117,10 +103,10 @@ def _game(pred, gt, level = 0):
     hc = h2 // g
     wc = w2 // g
 
-    pred_cells = pred.view(b, 1, g, hc, g, wc).sum(dim = (3, 5))  # (B,1,g,g)
-    gt_cells = gt.view(b, 1, g, hc, g, wc).sum(dim = (3, 5))      # (B,1,g,g)
+    pred_cells = pred.view(b, 1, g, hc, g, wc).sum(dim = (3, 5))
+    gt_cells = gt.view(b, 1, g, hc, g, wc).sum(dim = (3, 5))
 
-    err = (pred_cells - gt_cells).abs().view(b, -1).mean(dim = 1)  # avg over cells
+    err = (pred_cells - gt_cells).abs().view(b, -1).mean(dim = 1)
     return err.mean().item()
 
 
@@ -200,30 +186,64 @@ class MakeResizable(Dataset):
 
 
 class TrainAugment(Dataset):
-    def __init__(self, base, mode, crop_size = 224, flip_prob = 0.5, stride = OUT_STRIDE):
+    """
+    IMPORTANT: expects base_train to return points (pts_out) so we can
+    regenerate density for each crop (avoids Gaussian truncation bug).
+    """
+    def __init__(self, base, mode, sigma, crop_size = 224, flip_prob = 0.5, stride = OUT_STRIDE):
         self.base = base
         self.mode = mode
         self.crop_size = crop_size
         self.flip_prob = flip_prob
         self.stride = stride
+        self.sigma_out = max(1.0, float(sigma) / float(stride))
 
     def __len__(self):
         return len(self.base)
+
+    def _crop_and_make_den(self, x_h, x_w, pts_out, y0, y1, x0, x1):
+        # output-space crop box
+        y0d, y1d = y0 // self.stride, y1 // self.stride
+        x0d, x1d = x0 // self.stride, x1 // self.stride
+        h_out = max(1, (y1 - y0) // self.stride)
+        w_out = max(1, (x1 - x0) // self.stride)
+
+        # select points inside crop (pts_out are in output-space coords)
+        pts = pts_out
+        if isinstance(pts, torch.Tensor):
+            pts = pts.detach().cpu().numpy()
+        pts = np.asarray(pts, dtype = np.float32).reshape(-1, 2)
+
+        if pts.size == 0:
+            dm = np.zeros((h_out, w_out), dtype = np.float32)
+        else:
+            m = (
+                (pts[:, 0] >= x0d) & (pts[:, 0] < x1d) &
+                (pts[:, 1] >= y0d) & (pts[:, 1] < y1d)
+            )
+            pts_c = pts[m].copy()
+            if pts_c.size == 0:
+                dm = np.zeros((h_out, w_out), dtype = np.float32)
+            else:
+                pts_c[:, 0] -= x0d
+                pts_c[:, 1] -= y0d
+                dm = density_from_points(pts_c, h_out, w_out, sigma = self.sigma_out)
+
+        den = torch.from_numpy(dm)[None, ...]  # (1,h_out,w_out)
+        return den, (y0d, y1d, x0d, x1d)
 
     def __getitem__(self, idx):
         sample = self.base[idx]
         do_flip = (random.random() < self.flip_prob)
 
         if self.mode == "rgb":
-            x_rgb, den, a, b = sample
+            # base_train must be (x_rgb, den, pts_out, f, c)
+            x_rgb, den_full, pts_out, a, b = sample
             _, h, w = x_rgb.shape
             y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
 
-            y0d, y1d = y0 // self.stride, y1 // self.stride
-            x0d, x1d = x0 // self.stride, x1 // self.stride
-
             x_rgb = x_rgb[:, y0:y1, x0:x1]
-            den = den[:, y0d:y1d, x0d:x1d]
+            den, _ = self._crop_and_make_den(h, w, pts_out, y0, y1, x0, x1)
 
             if do_flip:
                 x_rgb = _hflip(x_rgb)
@@ -232,15 +252,12 @@ class TrainAugment(Dataset):
             return _make_resizable(x_rgb), _make_resizable(den), a, b
 
         if self.mode == "t":
-            x_t, den, a, b = sample
+            x_t, den_full, pts_out, a, b = sample
             _, h, w = x_t.shape
             y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
 
-            y0d, y1d = y0 // self.stride, y1 // self.stride
-            x0d, x1d = x0 // self.stride, x1 // self.stride
-
             x_t = x_t[:, y0:y1, x0:x1]
-            den = den[:, y0d:y1d, x0d:x1d]
+            den, _ = self._crop_and_make_den(h, w, pts_out, y0, y1, x0, x1)
 
             if do_flip:
                 x_t = _hflip(x_t)
@@ -249,15 +266,12 @@ class TrainAugment(Dataset):
             return _make_resizable(x_t), _make_resizable(den), a, b
 
         if self.mode == "early":
-            x4, den, a, b = sample
+            x4, den_full, pts_out, a, b = sample
             _, h, w = x4.shape
             y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
 
-            y0d, y1d = y0 // self.stride, y1 // self.stride
-            x0d, x1d = x0 // self.stride, x1 // self.stride
-
             x4 = x4[:, y0:y1, x0:x1]
-            den = den[:, y0d:y1d, x0d:x1d]
+            den, _ = self._crop_and_make_den(h, w, pts_out, y0, y1, x0, x1)
 
             if do_flip:
                 x4 = _hflip(x4)
@@ -265,16 +279,14 @@ class TrainAugment(Dataset):
 
             return _make_resizable(x4), _make_resizable(den), a, b
 
-        x_rgb, x_t3, den, a, b = sample
+        # late / adaptive_late: base_train must be (x_rgb, x_t3, den, pts_out, f, c)
+        x_rgb, x_t3, den_full, pts_out, a, b = sample
         _, h, w = x_rgb.shape
         y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
 
-        y0d, y1d = y0 // self.stride, y1 // self.stride
-        x0d, x1d = x0 // self.stride, x1 // self.stride
-
         x_rgb = x_rgb[:, y0:y1, x0:x1]
         x_t3 = x_t3[:, y0:y1, x0:x1]
-        den = den[:, y0d:y1d, x0d:x1d]
+        den, _ = self._crop_and_make_den(h, w, pts_out, y0, y1, x0, x1)
 
         if do_flip:
             x_rgb = _hflip(x_rgb)
@@ -295,12 +307,11 @@ def main():
     ap.add_argument("--img_w", type = int, default = 1024)
     ap.add_argument("--sigma", type = float, default = 15.0)
 
-    # ECCV'24 protocol uses: Adam, lr 1e-5, wd 1e-4, crop 224, batch 1, 400 epochs.
     ap.add_argument("--epochs", type = int, default = 400)
     ap.add_argument("--batch_size", type = int, default = 1)
-    ap.add_argument("--grad_accum", type = int, default = 16, help = "Accumulate gradients to simulate a larger batch.")
+    ap.add_argument("--grad_accum", type = int, default = 1)  # <-- IMPORTANT: sanity/fairness
     ap.add_argument("--lr", type = float, default = 1e-5)
-    ap.add_argument("--gate_lr", type = float, default = 1e-4, help = "Only used for adaptive_late gate params.")
+    ap.add_argument("--gate_lr", type = float, default = 1e-5)
     ap.add_argument("--weight_decay", type = float, default = 1e-4)
 
     ap.add_argument("--amp", action = "store_true")
@@ -319,7 +330,7 @@ def main():
     ap.add_argument("--milestones", type = str, default = "200,300")
     ap.add_argument("--gamma", type = float, default = 0.1)
 
-    ap.add_argument("--freeze_backbones_epochs", type = int, default = 0, help = "For adaptive_late: freeze rgb/t nets for first N epochs.")
+    ap.add_argument("--freeze_backbones_epochs", type = int, default = 0)
 
     args = ap.parse_args()
 
@@ -331,20 +342,27 @@ def main():
 
     img_size = (args.img_h, args.img_w)
 
+    # IMPORTANT: return_pts=True for training ONLY (your dataset must support this)
     if args.mode == "rgb":
-        base_train = RGBTCC_RGBDataset(args.data_root, args.split_train, img_size, args.sigma)
-        base_val = RGBTCC_RGBDataset(args.data_root, args.split_val, img_size, args.sigma)
+        base_train = RGBTCC_RGBDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True)
+        base_val = RGBTCC_RGBDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False)
     elif args.mode == "t":
-        base_train = RGBTCC_TDataset(args.data_root, args.split_train, img_size, args.sigma)
-        base_val = RGBTCC_TDataset(args.data_root, args.split_val, img_size, args.sigma)
+        base_train = RGBTCC_TDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True)
+        base_val = RGBTCC_TDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False)
     elif args.mode == "early":
-        base_train = RGBTCC_EarlyFusionDataset(args.data_root, args.split_train, img_size, args.sigma)
-        base_val = RGBTCC_EarlyFusionDataset(args.data_root, args.split_val, img_size, args.sigma)
+        base_train = RGBTCC_EarlyFusionDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True)
+        base_val = RGBTCC_EarlyFusionDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False)
     else:
-        base_train = RGBTCC_PairedDataset(args.data_root, args.split_train, img_size, args.sigma)
-        base_val = RGBTCC_PairedDataset(args.data_root, args.split_val, img_size, args.sigma)
+        base_train = RGBTCC_PairedDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True)
+        base_val = RGBTCC_PairedDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False)
 
-    train_ds = TrainAugment(base_train, mode = args.mode, crop_size = args.crop_size, flip_prob = args.flip_prob)
+    train_ds = TrainAugment(
+        base_train,
+        mode = args.mode,
+        sigma = args.sigma,
+        crop_size = args.crop_size,
+        flip_prob = args.flip_prob,
+    )
     val_ds = MakeResizable(base_val)
 
     if args.num_workers < 0:
@@ -387,7 +405,6 @@ def main():
     else:
         model = CSRNetRGBT_AdaptiveLate(load_imagenet = True).to(device)
 
-    # Optimizer (with a faster LR for the gate in adaptive_late)
     if args.mode == "adaptive_late":
         backbone_params = list(model.rgb_net.parameters()) + list(model.t_net.parameters())
         gate_params = list(model.gate.parameters())
@@ -492,7 +509,6 @@ def main():
             if step == 1 or step % 50 == 0:
                 print(f"[e{ep:03d} s{step:04d}/{len(train_dl)}] loss = {run_loss / step:.6f}")
 
-        # leftover grads if not divisible by grad_accum
         if len(train_dl) % max(1, args.grad_accum) != 0:
             if args.clip_grad and args.clip_grad > 0:
                 scaler.unscale_(optim)
