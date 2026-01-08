@@ -8,7 +8,6 @@ from torchvision import transforms
 from scipy.ndimage import gaussian_filter
 from scipy.io import loadmat
 
-OUT_STRIDE = 8
 
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
 _IMAGENET_STD = [0.229, 0.224, 0.225]
@@ -43,14 +42,21 @@ def _den_to_tensor(den_hw):
 
 
 def density_from_points(points_xy, h, w, sigma = 15.0):
+    """
+    points_xy: (N,2) in (x,y) coordinates in the SAME space as (h,w).
+    Returns a density map normalized so sum == N (when N > 0).
+    """
     dm = np.zeros((h, w), dtype = np.float32)
     if points_xy.size == 0:
         return dm
+
     xs = np.clip(points_xy[:, 0].astype(int), 0, w - 1)
     ys = np.clip(points_xy[:, 1].astype(int), 0, h - 1)
+
     dm[ys, xs] = 1.0
     dm = gaussian_filter(dm, sigma = sigma, mode = "constant")
-    s = dm.sum()
+
+    s = float(dm.sum())
     if s > 0:
         dm *= (len(xs) / s)
     return dm
@@ -59,30 +65,37 @@ def density_from_points(points_xy, h, w, sigma = 15.0):
 def _load_points_json(p):
     with open(p, "r") as f:
         data = json.load(f)
+
     for k in ["points", "keypoints", "annotations", "labels"]:
         if k in data and isinstance(data[k], list):
             pts = np.array(data[k], dtype = np.float32).reshape(-1, 2)
             return pts
+
     return np.zeros((0, 2), dtype = np.float32)
 
 
 def _load_points_mat(p):
     m = loadmat(p)
+
     if "point" in m:
         return np.array(m["point"], dtype = np.float32).reshape(-1, 2)
+
     if "image_info" in m:
         pts = m["image_info"][0, 0][0, 0][0]
         return np.array(pts, dtype = np.float32).reshape(-1, 2)
+
     return np.zeros((0, 2), dtype = np.float32)
 
 
 def load_points(label_path_no_ext):
     json_p = label_path_no_ext + ".json"
     mat_p = label_path_no_ext + ".mat"
+
     if os.path.exists(json_p):
         return _load_points_json(json_p)
     if os.path.exists(mat_p):
         return _load_points_mat(mat_p)
+
     return np.zeros((0, 2), dtype = np.float32)
 
 
@@ -96,12 +109,22 @@ def _to_t3(img_any):
 
 
 class RGBTCC_RGBDataset(Dataset):
-    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None, return_pts = False):
+    def __init__(
+        self,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
+    ):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
         self.h, self.w = img_size
-        self.sigma = sigma
-        self.return_pts = return_pts
+        self.sigma = float(sigma)
+        self.return_pts = bool(return_pts)
+        self.out_stride = int(out_stride)
 
         names = [f for f in os.listdir(self.split_dir) if f.endswith("_RGB.jpg") or f.endswith("_RGB.png")]
         ids = sorted({n.replace("_RGB.jpg", "").replace("_RGB.png", "") for n in names})
@@ -111,7 +134,8 @@ class RGBTCC_RGBDataset(Dataset):
             raise RuntimeError(f"No *_RGB images in {self.split_dir}")
         self.ids = ids
 
-        self.h_out, self.w_out = self.h // OUT_STRIDE, self.w // OUT_STRIDE
+        self.h_out = self.h // self.out_stride
+        self.w_out = self.w // self.out_stride
 
     def __len__(self):
         return len(self.ids)
@@ -141,16 +165,18 @@ class RGBTCC_RGBDataset(Dataset):
 
         pts_out = pts.copy()
         if pts_out.size > 0:
-            pts_out[:, 0] /= OUT_STRIDE
-            pts_out[:, 1] /= OUT_STRIDE
+            pts_out[:, 0] /= self.out_stride
+            pts_out[:, 1] /= self.out_stride
 
         den = density_from_points(
-            pts_out, self.h_out, self.w_out,
-            sigma = max(1.0, self.sigma / OUT_STRIDE)
+            pts_out,
+            self.h_out,
+            self.w_out,
+            sigma = max(1.0, self.sigma / self.out_stride),
         )
 
         gt_count = float(len(pts))
-        s = den.sum()
+        s = float(den.sum())
         if gt_count > 0 and s > 0:
             den *= (gt_count / s)
 
@@ -165,12 +191,22 @@ class RGBTCC_RGBDataset(Dataset):
 
 
 class RGBTCC_TDataset(Dataset):
-    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None, return_pts = False):
+    def __init__(
+        self,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
+    ):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
         self.h, self.w = img_size
-        self.sigma = sigma
-        self.return_pts = return_pts
+        self.sigma = float(sigma)
+        self.return_pts = bool(return_pts)
+        self.out_stride = int(out_stride)
 
         names = [f for f in os.listdir(self.split_dir) if f.endswith("_T.jpg") or f.endswith("_T.png")]
         ids = sorted({n.replace("_T.jpg", "").replace("_T.png", "") for n in names})
@@ -180,7 +216,8 @@ class RGBTCC_TDataset(Dataset):
             raise RuntimeError(f"No *_T images in {self.split_dir}")
         self.ids = ids
 
-        self.h_out, self.w_out = self.h // OUT_STRIDE, self.w // OUT_STRIDE
+        self.h_out = self.h // self.out_stride
+        self.w_out = self.w // self.out_stride
 
     def __len__(self):
         return len(self.ids)
@@ -210,16 +247,18 @@ class RGBTCC_TDataset(Dataset):
 
         pts_out = pts.copy()
         if pts_out.size > 0:
-            pts_out[:, 0] /= OUT_STRIDE
-            pts_out[:, 1] /= OUT_STRIDE
+            pts_out[:, 0] /= self.out_stride
+            pts_out[:, 1] /= self.out_stride
 
         den = density_from_points(
-            pts_out, self.h_out, self.w_out,
-            sigma = max(1.0, self.sigma / OUT_STRIDE)
+            pts_out,
+            self.h_out,
+            self.w_out,
+            sigma = max(1.0, self.sigma / self.out_stride),
         )
 
         gt_count = float(len(pts))
-        s = den.sum()
+        s = float(den.sum())
         if gt_count > 0 and s > 0:
             den *= (gt_count / s)
 
@@ -234,12 +273,22 @@ class RGBTCC_TDataset(Dataset):
 
 
 class RGBTCC_PairedDataset(Dataset):
-    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None, return_pts = False):
+    def __init__(
+        self,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
+    ):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
         self.h, self.w = img_size
-        self.sigma = sigma
-        self.return_pts = return_pts
+        self.sigma = float(sigma)
+        self.return_pts = bool(return_pts)
+        self.out_stride = int(out_stride)
 
         names = [f for f in os.listdir(self.split_dir) if f.endswith("_RGB.jpg") or f.endswith("_RGB.png")]
         ids = sorted({n.replace("_RGB.jpg", "").replace("_RGB.png", "") for n in names})
@@ -249,7 +298,8 @@ class RGBTCC_PairedDataset(Dataset):
             raise RuntimeError(f"No *_RGB images in {self.split_dir}")
         self.ids = ids
 
-        self.h_out, self.w_out = self.h // OUT_STRIDE, self.w // OUT_STRIDE
+        self.h_out = self.h // self.out_stride
+        self.w_out = self.w // self.out_stride
 
     def __len__(self):
         return len(self.ids)
@@ -286,16 +336,18 @@ class RGBTCC_PairedDataset(Dataset):
 
         pts_out = pts.copy()
         if pts_out.size > 0:
-            pts_out[:, 0] /= OUT_STRIDE
-            pts_out[:, 1] /= OUT_STRIDE
+            pts_out[:, 0] /= self.out_stride
+            pts_out[:, 1] /= self.out_stride
 
         den = density_from_points(
-            pts_out, self.h_out, self.w_out,
-            sigma = max(1.0, self.sigma / OUT_STRIDE)
+            pts_out,
+            self.h_out,
+            self.w_out,
+            sigma = max(1.0, self.sigma / self.out_stride),
         )
 
         gt_count = float(len(pts))
-        s = den.sum()
+        s = float(den.sum())
         if gt_count > 0 and s > 0:
             den *= (gt_count / s)
 
@@ -311,12 +363,22 @@ class RGBTCC_PairedDataset(Dataset):
 
 
 class RGBTCC_EarlyFusionDataset(Dataset):
-    def __init__(self, root, split, img_size = (768, 1024), sigma = 15.0, max_count = None, return_pts = False):
+    def __init__(
+        self,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
+    ):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
         self.h, self.w = img_size
-        self.sigma = sigma
-        self.return_pts = return_pts
+        self.sigma = float(sigma)
+        self.return_pts = bool(return_pts)
+        self.out_stride = int(out_stride)
 
         names = [f for f in os.listdir(self.split_dir) if f.endswith("_RGB.jpg") or f.endswith("_RGB.png")]
         ids = sorted({n.replace("_RGB.jpg", "").replace("_RGB.png", "") for n in names})
@@ -326,7 +388,8 @@ class RGBTCC_EarlyFusionDataset(Dataset):
             raise RuntimeError(f"No *_RGB images in {self.split_dir}")
         self.ids = ids
 
-        self.h_out, self.w_out = self.h // OUT_STRIDE, self.w // OUT_STRIDE
+        self.h_out = self.h // self.out_stride
+        self.w_out = self.w // self.out_stride
 
     def __len__(self):
         return len(self.ids)
@@ -362,16 +425,18 @@ class RGBTCC_EarlyFusionDataset(Dataset):
 
         pts_out = pts.copy()
         if pts_out.size > 0:
-            pts_out[:, 0] /= OUT_STRIDE
-            pts_out[:, 1] /= OUT_STRIDE
+            pts_out[:, 0] /= self.out_stride
+            pts_out[:, 1] /= self.out_stride
 
         den = density_from_points(
-            pts_out, self.h_out, self.w_out,
-            sigma = max(1.0, self.sigma / OUT_STRIDE)
+            pts_out,
+            self.h_out,
+            self.w_out,
+            sigma = max(1.0, self.sigma / self.out_stride),
         )
 
         gt_count = float(len(pts))
-        s = den.sum()
+        s = float(den.sum())
         if gt_count > 0 and s > 0:
             den *= (gt_count / s)
 

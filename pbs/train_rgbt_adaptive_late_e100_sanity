@@ -4,8 +4,8 @@
 #PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
 #PBS -l walltime=12:00:00
 #PBS -j oe
-#PBS -o /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/
-#PBS -e /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/
+#PBS -o /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100.out
+#PBS -e /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100.err
 
 REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
 cd "$REPO" || exit 1
@@ -17,7 +17,7 @@ export PYTHONPATH="$REPO:$PYTHONPATH"
 
 python3 -u scripts/train_rgbt.py \
   --mode adaptive_late \
-  --data_root ./data/RGBT-CC-CVPR2021 \
+  --data_root "$REPO/data/RGBT-CC-CVPR2021" \
   --epochs 100 \
   --batch_size 1 \
   --grad_accum 16 \

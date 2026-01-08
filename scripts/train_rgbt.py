@@ -25,10 +25,8 @@ from datasets.rgbt_cc import (
     RGBTCC_TDataset,
     RGBTCC_PairedDataset,
     RGBTCC_EarlyFusionDataset,
-    density_from_points,  # <-- make sure this is importable
+    density_from_points,
 )
-
-OUT_STRIDE = 8
 
 
 def set_seed(s = 42, deterministic = True):
@@ -65,7 +63,7 @@ def _make_resizable(x):
     return x.contiguous().clone()
 
 
-def _crop_params(h, w, crop, stride = OUT_STRIDE):
+def _crop_params(h, w, crop, stride):
     ch = min(crop, h)
     cw = min(crop, w)
 
@@ -84,6 +82,40 @@ def _crop_params(h, w, crop, stride = OUT_STRIDE):
 def _set_requires_grad(module, flag):
     for p in module.parameters():
         p.requires_grad = flag
+
+
+def _resize_density_sum_preserving(den, size_hw):
+    """
+    Resize a density map to (H, W) while preserving the total sum (i.e., count).
+    den: (B, 1, H, W) or (1, H, W) or (H, W)
+    """
+    if not torch.is_tensor(den):
+        return den
+
+    if den.dim() == 2:
+        den4 = den[None, None, ...]
+        squeeze_back = "2d"
+    elif den.dim() == 3:
+        den4 = den[None, ...]
+        squeeze_back = "3d"
+    else:
+        den4 = den
+        squeeze_back = None
+
+    old_h, old_w = den4.shape[-2], den4.shape[-1]
+    new_h, new_w = int(size_hw[0]), int(size_hw[1])
+
+    if old_h == new_h and old_w == new_w:
+        den_rs = den4
+    else:
+        den_rs = F.interpolate(den4, size = (new_h, new_w), mode = "bilinear", align_corners = False)
+        den_rs = den_rs * (old_h * old_w) / float(new_h * new_w)
+
+    if squeeze_back == "2d":
+        return den_rs[0, 0]
+    if squeeze_back == "3d":
+        return den_rs[0]
+    return den_rs
 
 
 def _game(pred, gt, level = 0):
@@ -148,7 +180,7 @@ def evaluate(model, loader, device, mode, game_levels = (0, 1, 2, 3)):
             pred = model(x_rgb, x_t3)
 
         if pred.shape[-2:] != den.shape[-2:]:
-            den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
+            den = _resize_density_sum_preserving(den, pred.shape[-2:])
 
         c_pred = float(pred.sum().item())
         c_gt = float(den.sum().item())
@@ -190,25 +222,23 @@ class TrainAugment(Dataset):
     IMPORTANT: expects base_train to return points (pts_out) so we can
     regenerate density for each crop (avoids Gaussian truncation bug).
     """
-    def __init__(self, base, mode, sigma, crop_size = 224, flip_prob = 0.5, stride = OUT_STRIDE):
+    def __init__(self, base, mode, sigma, crop_size = 224, flip_prob = 0.5, stride = 8):
         self.base = base
         self.mode = mode
         self.crop_size = crop_size
         self.flip_prob = flip_prob
-        self.stride = stride
-        self.sigma_out = max(1.0, float(sigma) / float(stride))
+        self.stride = int(stride)
+        self.sigma_out = max(1.0, float(sigma) / float(self.stride))
 
     def __len__(self):
         return len(self.base)
 
-    def _crop_and_make_den(self, x_h, x_w, pts_out, y0, y1, x0, x1):
-        # output-space crop box
+    def _crop_and_make_den(self, pts_out, y0, y1, x0, x1):
         y0d, y1d = y0 // self.stride, y1 // self.stride
         x0d, x1d = x0 // self.stride, x1 // self.stride
         h_out = max(1, (y1 - y0) // self.stride)
         w_out = max(1, (x1 - x0) // self.stride)
 
-        # select points inside crop (pts_out are in output-space coords)
         pts = pts_out
         if isinstance(pts, torch.Tensor):
             pts = pts.detach().cpu().numpy()
@@ -229,21 +259,20 @@ class TrainAugment(Dataset):
                 pts_c[:, 1] -= y0d
                 dm = density_from_points(pts_c, h_out, w_out, sigma = self.sigma_out)
 
-        den = torch.from_numpy(dm)[None, ...]  # (1,h_out,w_out)
-        return den, (y0d, y1d, x0d, x1d)
+        den = torch.from_numpy(dm)[None, ...]
+        return den
 
     def __getitem__(self, idx):
         sample = self.base[idx]
         do_flip = (random.random() < self.flip_prob)
 
         if self.mode == "rgb":
-            # base_train must be (x_rgb, den, pts_out, f, c)
             x_rgb, den_full, pts_out, a, b = sample
             _, h, w = x_rgb.shape
             y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
 
             x_rgb = x_rgb[:, y0:y1, x0:x1]
-            den, _ = self._crop_and_make_den(h, w, pts_out, y0, y1, x0, x1)
+            den = self._crop_and_make_den(pts_out, y0, y1, x0, x1)
 
             if do_flip:
                 x_rgb = _hflip(x_rgb)
@@ -257,7 +286,7 @@ class TrainAugment(Dataset):
             y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
 
             x_t = x_t[:, y0:y1, x0:x1]
-            den, _ = self._crop_and_make_den(h, w, pts_out, y0, y1, x0, x1)
+            den = self._crop_and_make_den(pts_out, y0, y1, x0, x1)
 
             if do_flip:
                 x_t = _hflip(x_t)
@@ -271,7 +300,7 @@ class TrainAugment(Dataset):
             y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
 
             x4 = x4[:, y0:y1, x0:x1]
-            den, _ = self._crop_and_make_den(h, w, pts_out, y0, y1, x0, x1)
+            den = self._crop_and_make_den(pts_out, y0, y1, x0, x1)
 
             if do_flip:
                 x4 = _hflip(x4)
@@ -279,14 +308,13 @@ class TrainAugment(Dataset):
 
             return _make_resizable(x4), _make_resizable(den), a, b
 
-        # late / adaptive_late: base_train must be (x_rgb, x_t3, den, pts_out, f, c)
         x_rgb, x_t3, den_full, pts_out, a, b = sample
         _, h, w = x_rgb.shape
         y0, y1, x0, x1 = _crop_params(h, w, self.crop_size, stride = self.stride)
 
         x_rgb = x_rgb[:, y0:y1, x0:x1]
         x_t3 = x_t3[:, y0:y1, x0:x1]
-        den, _ = self._crop_and_make_den(h, w, pts_out, y0, y1, x0, x1)
+        den = self._crop_and_make_den(pts_out, y0, y1, x0, x1)
 
         if do_flip:
             x_rgb = _hflip(x_rgb)
@@ -307,9 +335,11 @@ def main():
     ap.add_argument("--img_w", type = int, default = 1024)
     ap.add_argument("--sigma", type = float, default = 15.0)
 
+    ap.add_argument("--out_stride", type = int, default = 8)
+
     ap.add_argument("--epochs", type = int, default = 400)
     ap.add_argument("--batch_size", type = int, default = 1)
-    ap.add_argument("--grad_accum", type = int, default = 1)  # <-- IMPORTANT: sanity/fairness
+    ap.add_argument("--grad_accum", type = int, default = 1)
     ap.add_argument("--lr", type = float, default = 1e-5)
     ap.add_argument("--gate_lr", type = float, default = 1e-5)
     ap.add_argument("--weight_decay", type = float, default = 1e-4)
@@ -326,13 +356,24 @@ def main():
 
     ap.add_argument("--optimizer", choices = ["adam", "adamw"], default = "adam")
 
-    ap.add_argument("--scheduler", choices = ["none", "multistep"], default = "none")
+    # Scheduler options
+    ap.add_argument("--scheduler", choices = ["none", "multistep", "onecycle"], default = "none")
     ap.add_argument("--milestones", type = str, default = "200,300")
     ap.add_argument("--gamma", type = float, default = 0.1)
+
+    # OneCycleLR options (fast change)
+    ap.add_argument("--max_lr", type = float, default = 1e-4)
+    ap.add_argument("--max_gate_lr", type = float, default = 1e-4)
+    ap.add_argument("--pct_start", type = float, default = 0.1)
+    ap.add_argument("--div_factor", type = float, default = 10.0)
+    ap.add_argument("--final_div_factor", type = float, default = 1000.0)
 
     ap.add_argument("--freeze_backbones_epochs", type = int, default = 0)
 
     args = ap.parse_args()
+
+    assert args.img_h % args.out_stride == 0, "img_h must be divisible by out_stride"
+    assert args.img_w % args.out_stride == 0, "img_w must be divisible by out_stride"
 
     os.makedirs(args.save_dir, exist_ok = True)
     set_seed(args.seed, deterministic = True)
@@ -342,19 +383,42 @@ def main():
 
     img_size = (args.img_h, args.img_w)
 
-    # IMPORTANT: return_pts=True for training ONLY (your dataset must support this)
     if args.mode == "rgb":
-        base_train = RGBTCC_RGBDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True)
-        base_val = RGBTCC_RGBDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False)
+        base_train = RGBTCC_RGBDataset(
+            args.data_root, args.split_train, img_size, args.sigma,
+            return_pts = True, out_stride = args.out_stride
+        )
+        base_val = RGBTCC_RGBDataset(
+            args.data_root, args.split_val, img_size, args.sigma,
+            return_pts = False, out_stride = args.out_stride
+        )
     elif args.mode == "t":
-        base_train = RGBTCC_TDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True)
-        base_val = RGBTCC_TDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False)
+        base_train = RGBTCC_TDataset(
+            args.data_root, args.split_train, img_size, args.sigma,
+            return_pts = True, out_stride = args.out_stride
+        )
+        base_val = RGBTCC_TDataset(
+            args.data_root, args.split_val, img_size, args.sigma,
+            return_pts = False, out_stride = args.out_stride
+        )
     elif args.mode == "early":
-        base_train = RGBTCC_EarlyFusionDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True)
-        base_val = RGBTCC_EarlyFusionDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False)
+        base_train = RGBTCC_EarlyFusionDataset(
+            args.data_root, args.split_train, img_size, args.sigma,
+            return_pts = True, out_stride = args.out_stride
+        )
+        base_val = RGBTCC_EarlyFusionDataset(
+            args.data_root, args.split_val, img_size, args.sigma,
+            return_pts = False, out_stride = args.out_stride
+        )
     else:
-        base_train = RGBTCC_PairedDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True)
-        base_val = RGBTCC_PairedDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False)
+        base_train = RGBTCC_PairedDataset(
+            args.data_root, args.split_train, img_size, args.sigma,
+            return_pts = True, out_stride = args.out_stride
+        )
+        base_val = RGBTCC_PairedDataset(
+            args.data_root, args.split_val, img_size, args.sigma,
+            return_pts = False, out_stride = args.out_stride
+        )
 
     train_ds = TrainAugment(
         base_train,
@@ -362,6 +426,7 @@ def main():
         sigma = args.sigma,
         crop_size = args.crop_size,
         flip_prob = args.flip_prob,
+        stride = args.out_stride,
     )
     val_ds = MakeResizable(base_val)
 
@@ -432,11 +497,34 @@ def main():
     mse = nn.MSELoss()
     scaler = torch.amp.GradScaler("cuda", enabled = (args.amp and device.type == "cuda"))
 
+    # Scheduler setup
+    scheduler = None
+    step_scheduler_per_optim_step = False
+
+    steps_per_epoch_optim = int(math.ceil(len(train_dl) / float(max(1, args.grad_accum))))
+
     if args.scheduler == "multistep":
         ms = [int(x.strip()) for x in args.milestones.split(",") if x.strip()]
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optim, milestones = ms, gamma = args.gamma)
-    else:
-        scheduler = None
+        step_scheduler_per_optim_step = False  # epoch-level
+
+    elif args.scheduler == "onecycle":
+        if args.mode == "adaptive_late":
+            max_lrs = [args.max_lr, args.max_gate_lr]
+        else:
+            max_lrs = args.max_lr
+
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optim,
+            max_lr = max_lrs,
+            epochs = args.epochs,
+            steps_per_epoch = steps_per_epoch_optim,
+            pct_start = args.pct_start,
+            div_factor = args.div_factor,
+            final_div_factor = args.final_div_factor,
+            anneal_strategy = "cos",
+        )
+        step_scheduler_per_optim_step = True  # batch-level (but only when optim.step happens)
 
     best_mae = float("inf")
 
@@ -489,7 +577,7 @@ def main():
                     pred = model(x_rgb, x_t3)
 
                 if pred.shape[-2:] != den.shape[-2:]:
-                    den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
+                    den = _resize_density_sum_preserving(den, pred.shape[-2:])
 
                 loss = mse(pred, den) / max(1, args.grad_accum)
 
@@ -506,21 +594,30 @@ def main():
                 scaler.update()
                 optim.zero_grad(set_to_none = True)
 
+                if scheduler is not None and step_scheduler_per_optim_step:
+                    scheduler.step()
+
             if step == 1 or step % 50 == 0:
                 print(f"[e{ep:03d} s{step:04d}/{len(train_dl)}] loss = {run_loss / step:.6f}")
 
+        # Handle remainder accumulation (if len(train_dl) not divisible by grad_accum)
         if len(train_dl) % max(1, args.grad_accum) != 0:
             if args.clip_grad and args.clip_grad > 0:
                 scaler.unscale_(optim)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = args.clip_grad)
+
             scaler.step(optim)
             scaler.update()
             optim.zero_grad(set_to_none = True)
 
+            if scheduler is not None and step_scheduler_per_optim_step:
+                scheduler.step()
+
         train_loss = run_loss / max(1, len(train_dl))
         val_mae, val_rmse, val_game = evaluate(model, val_dl, device, args.mode)
 
-        if scheduler is not None:
+        # Epoch-level scheduler step (MultiStepLR)
+        if scheduler is not None and (not step_scheduler_per_optim_step):
             scheduler.step()
 
         torch.save(

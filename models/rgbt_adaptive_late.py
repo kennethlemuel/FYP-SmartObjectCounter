@@ -5,6 +5,23 @@ import torch.nn.functional as F
 from models.csrnet import CSRNet
 
 
+def _resize_density_sum_preserving(den, size_hw):
+    """
+    Resize a density map to (H, W) while preserving the total sum (count).
+    den: (B, 1, H, W)
+    size_hw: (H_new, W_new)
+    """
+    old_h, old_w = den.shape[-2], den.shape[-1]
+    new_h, new_w = int(size_hw[0]), int(size_hw[1])
+
+    if old_h == new_h and old_w == new_w:
+        return den
+
+    den_rs = F.interpolate(den, size = (new_h, new_w), mode = "bilinear", align_corners = False)
+    den_rs = den_rs * (old_h * old_w) / float(new_h * new_w)
+    return den_rs
+
+
 class _GateNet(nn.Module):
     """
     Lightweight per-pixel gate that fuses two density predictions.
@@ -22,7 +39,6 @@ class _GateNet(nn.Module):
         nn.init.zeros_(self.conv2.bias)
 
     def forward(self, pred_rgb, pred_t):
-        # (B,1,H,W) -> (B,4,H,W)
         x = torch.cat(
             [
                 pred_rgb,
@@ -52,7 +68,7 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
         pred_t = self.t_net(x_t3)       # (B,1,h,w)
 
         if pred_t.shape[-2:] != pred_rgb.shape[-2:]:
-            pred_t = F.interpolate(pred_t, size = pred_rgb.shape[-2:], mode = "bilinear", align_corners = False)
+            pred_t = _resize_density_sum_preserving(pred_t, pred_rgb.shape[-2:])
 
         g = self.gate(pred_rgb, pred_t)  # (B,1,h,w) in [0,1]
         return g * pred_rgb + (1.0 - g) * pred_t
