@@ -1,0 +1,28 @@
+#!/bin/bash
+#PBS -N sanity_rgbt_adaptive_late_cropcounts
+#PBS -P personal-kenneth0
+#PBS -l select=1:ncpus=4:mem=8gb
+#PBS -l walltime=00:10:00
+#PBS -j oe
+#PBS -o /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/sanity_rgbt_adaptive_late_cropcounts.out
+#PBS -e /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/sanity_rgbt_adaptive_late_cropcounts.err
+
+REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+cd "$REPO" || exit 1
+
+module purge
+module load pytorch/2.6.0-py3-cu11.8
+
+export PYTHONPATH="$REPO:$PYTHONPATH"
+
+python -u scripts/sanity_check_rgbtcc.py \
+  --mode adaptive_late \
+  --data_root ./data/RGBT-CC-CVPR2021 \
+  --split train \
+  --img_h 768 \
+  --img_w 1024 \
+  --sigma 15.0 \
+  --out_stride 8 \
+  --crop_size 224 \
+  --n 40 \
+  --seed 42
