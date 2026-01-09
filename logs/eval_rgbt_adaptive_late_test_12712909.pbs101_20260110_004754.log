@@ -1,0 +1,6 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/eval_rgbt_adaptive_late_test_12712909.pbs101_20260110_004754.log
+[init] device = cuda
+[init] PROJECT_ROOT = /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+[eval] using EMA weights from checkpoint
+[ckpt] epoch = 52
+[split test] MAE = 15.072, RMSE = 25.178, GAME0 = 15.072, GAME1 = 19.505, GAME2 = 24.119, GAME3 = 31.296

@@ -1,12 +1,15 @@
 import os
 import sys
-import math
 import argparse
-
 import torch
 from torch.utils.data import DataLoader
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Ensure scripts/ is importable (so `import train_rgbt` works reliably)
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
 _CANDIDATES = [
     _THIS_DIR,
     os.path.dirname(_THIS_DIR),
@@ -23,6 +26,8 @@ if PROJECT_ROOT is None:
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# <-- This was missing and caused your NameError
+import train_rgbt
 
 from datasets.rgbt_cc import (
     RGBTCC_RGBDataset,
@@ -81,7 +86,7 @@ def main():
     ap.add_argument("--out_stride", type = int, default = 8)
 
     ap.add_argument("--ckpt", required = True)
-    ap.add_argument("--use_ema", action = "store_true")  # load ema_model weights if present
+    ap.add_argument("--use_ema", action = "store_true")
     ap.add_argument("--num_workers", type = int, default = 4)
     ap.add_argument("--seed", type = int, default = 42)
 
@@ -118,29 +123,24 @@ def main():
 
     ckpt_obj = _safe_torch_load(args.ckpt, map_location = "cpu")
 
-    # Your ckpt is a dict with keys like: model, ema_model (optional), epoch, best_rmse, optimizer, scheduler
     if isinstance(ckpt_obj, dict) and ("model" in ckpt_obj or "ema_model" in ckpt_obj):
         if args.use_ema and ("ema_model" in ckpt_obj) and (ckpt_obj["ema_model"] is not None):
             sd = ckpt_obj["ema_model"]
-            print("[ckpt] loading ema_model weights")
+            print("[eval] using EMA weights from checkpoint")
         else:
             sd = ckpt_obj["model"]
-            print("[ckpt] loading model weights")
+            print("[eval] using raw model weights from checkpoint")
+
         model.load_state_dict(sd, strict = True)
         if "epoch" in ckpt_obj:
             print(f"[ckpt] epoch = {ckpt_obj['epoch']}")
     else:
-        # If someone saved just a state_dict directly
         print("[ckpt] loading raw state_dict")
         model.load_state_dict(ckpt_obj, strict = True)
 
     stats = train_rgbt.evaluate(model, loader, device, mode = args.mode)
-    print(f"[eval] split = {args.split}")
-    print(
-        f"[eval] RMSE = {stats['RMSE']:.3f}, MAE = {stats['MAE']:.3f}, "
-        f"GAME0 = {stats['GAME0']:.3f}, GAME1 = {stats['GAME1']:.3f}, "
-        f"GAME2 = {stats['GAME2']:.3f}, GAME3 = {stats['GAME3']:.3f}"
-    )
+    print(f"[split {args.split}] MAE = {stats['MAE']:.3f}, RMSE = {stats['RMSE']:.3f}, "
+          f"GAME0 = {stats['GAME0']:.3f}, GAME1 = {stats['GAME1']:.3f}, GAME2 = {stats['GAME2']:.3f}, GAME3 = {stats['GAME3']:.3f}")
 
 
 if __name__ == "__main__":

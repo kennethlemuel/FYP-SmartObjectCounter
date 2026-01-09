@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N eval_rgbt_adaptive_late_test
+#PBS -N eval_rgb_test
 #PBS -P personal-kenneth0
 #PBS -l select=1:ngpus=1:ncpus=8:mem=40gb
 #PBS -l walltime=01:00:00
@@ -21,13 +21,13 @@ module load pytorch/2.6.0-py3-cu11.8
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
 python -u scripts/eval_rgbt.py \
-  --mode adaptive_late \
+  --mode rgb \
   --data_root ./data/RGBT-CC-CVPR2021 \
   --split test \
   --img_h 768 \
   --img_w 1024 \
   --sigma 15.0 \
   --out_stride 8 \
-  --ckpt outputs/rgbt_adaptive_late_e100_count_ema/ckpt_best.pt \
+  --ckpt outputs/rgb_e100_count_ema/ckpt_best.pt \
   --use_ema \
   --num_workers 4
