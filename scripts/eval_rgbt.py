@@ -2,143 +2,145 @@ import os
 import sys
 import math
 import argparse
+
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_CANDIDATES = [
+    _THIS_DIR,
+    os.path.dirname(_THIS_DIR),
+    os.path.dirname(os.path.dirname(_THIS_DIR)),
+]
+PROJECT_ROOT = None
+for c in _CANDIDATES:
+    if os.path.isdir(os.path.join(c, "models")) and os.path.isdir(os.path.join(c, "datasets")):
+        PROJECT_ROOT = c
+        break
+if PROJECT_ROOT is None:
+    PROJECT_ROOT = os.path.dirname(_THIS_DIR)
+
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from models.rgbt_early import CSRNetRGBT_Early
-from models.rgbt_late import CSRNetRGBT_Late
-from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
-from datasets.rgbt_cc import RGBTCC_PairedDataset, RGBTCC_EarlyFusionDataset
+
+from datasets.rgbt_cc import (
+    RGBTCC_RGBDataset,
+    RGBTCC_TDataset,
+    RGBTCC_PairedDataset,
+    RGBTCC_EarlyFusionDataset,
+)
 
 
-def get_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    return torch.device("cpu")
+def _safe_torch_load(path: str, map_location: str = "cpu"):
+    try:
+        return torch.load(path, map_location = map_location, weights_only = True)
+    except TypeError:
+        return torch.load(path, map_location = map_location)
 
 
-def _load_state_dict(ckpt_path, device):
-    ckpt = torch.load(ckpt_path, map_location = device)
-    if isinstance(ckpt, dict):
-        if "model" in ckpt and isinstance(ckpt["model"], dict):
-            return ckpt["model"]
-        if "state_dict" in ckpt and isinstance(ckpt["state_dict"], dict):
-            return ckpt["state_dict"]
-    return ckpt
+def _build_dataset(mode: str, data_root: str, split: str, img_h: int, img_w: int, sigma: float, out_stride: int):
+    img_size = (int(img_h), int(img_w))
+
+    if mode == "rgb":
+        return RGBTCC_RGBDataset(
+            data_root, split, img_size, sigma,
+            return_pts = False, out_stride = out_stride
+        )
+
+    if mode == "t":
+        return RGBTCC_TDataset(
+            data_root, split, img_size, sigma,
+            return_pts = False, out_stride = out_stride
+        )
+
+    if mode == "early":
+        return RGBTCC_EarlyFusionDataset(
+            data_root, split, img_size, sigma,
+            return_pts = False, out_stride = out_stride
+        )
+
+    if mode in ["late", "adaptive_late"]:
+        return RGBTCC_PairedDataset(
+            data_root, split, img_size, sigma,
+            return_pts = False, out_stride = out_stride
+        )
+
+    raise ValueError(f"Unknown mode: {mode}")
 
 
-def _game(pred_den, gt_den, L):
-    h, w = pred_den.shape
-    k = 2 ** L
-    hs = max(1, h // k)
-    ws = max(1, w // k)
-
-    err = 0.0
-    for i in range(k):
-        for j in range(k):
-            y0 = i * hs
-            y1 = (i + 1) * hs if i < k - 1 else h
-            x0 = j * ws
-            x1 = (j + 1) * ws if j < k - 1 else w
-            p = float(pred_den[y0:y1, x0:x1].sum().item())
-            g = float(gt_den[y0:y1, x0:x1].sum().item())
-            err += abs(p - g)
-    return err
-
-
-@torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices = ["early", "late", "adaptive_late"], required = True)
+    ap.add_argument("--mode", choices = ["rgb", "t", "early", "late", "adaptive_late"], required = True)
     ap.add_argument("--data_root", required = True)
-    ap.add_argument("--split", default = "val", choices = ["train", "val", "test"])
+    ap.add_argument("--split", choices = ["val", "test", "train"], default = "test")
+
     ap.add_argument("--img_h", type = int, default = 768)
     ap.add_argument("--img_w", type = int, default = 1024)
     ap.add_argument("--sigma", type = float, default = 15.0)
+    ap.add_argument("--out_stride", type = int, default = 8)
+
     ap.add_argument("--ckpt", required = True)
-    ap.add_argument("--batch_size", type = int, default = 1)
-    ap.add_argument("--num_workers", type = int, default = 2)
+    ap.add_argument("--use_ema", action = "store_true")  # load ema_model weights if present
+    ap.add_argument("--num_workers", type = int, default = 4)
+    ap.add_argument("--seed", type = int, default = 42)
+
     args = ap.parse_args()
 
-    device = get_device()
+    assert args.img_h % args.out_stride == 0, "img_h must be divisible by out_stride"
+    assert args.img_w % args.out_stride == 0, "img_w must be divisible by out_stride"
 
-    if args.mode == "early":
-        ds = RGBTCC_EarlyFusionDataset(
-            root = args.data_root,
-            split = args.split,
-            img_size = (args.img_h, args.img_w),
-            sigma = args.sigma,
-        )
-        model = CSRNetRGBT_Early(load_imagenet = True).to(device)
+    train_rgbt.set_seed(args.seed, deterministic = True)
+    device = train_rgbt.get_device()
+    print(f"[init] device = {device}")
+    print(f"[init] PROJECT_ROOT = {PROJECT_ROOT}")
 
-    else:
-        ds = RGBTCC_PairedDataset(
-            root = args.data_root,
-            split = args.split,
-            img_size = (args.img_h, args.img_w),
-            sigma = args.sigma,
-        )
-        if args.mode == "late":
-            model = CSRNetRGBT_Late(load_imagenet = True).to(device)
-        else:
-            model = CSRNetRGBT_AdaptiveLate(load_imagenet = True).to(device)
+    ds = _build_dataset(
+        mode = args.mode,
+        data_root = args.data_root,
+        split = args.split,
+        img_h = args.img_h,
+        img_w = args.img_w,
+        sigma = args.sigma,
+        out_stride = args.out_stride,
+    )
 
-    dl = DataLoader(
+    loader = DataLoader(
         ds,
-        batch_size = args.batch_size,
+        batch_size = 1,
         shuffle = False,
-        num_workers = args.num_workers if device.type == "cuda" else 0,
-        pin_memory = (device.type == "cuda"),
+        num_workers = int(args.num_workers),
+        pin_memory = True,
         drop_last = False,
     )
 
-    sd = _load_state_dict(args.ckpt, device)
-    model.load_state_dict(sd, strict = True)
-    model.eval()
+    model = train_rgbt.build_model(args.mode, load_imagenet = True).to(device)
 
-    mae = 0.0
-    rmse = 0.0
-    game = [0.0, 0.0, 0.0, 0.0]
+    ckpt_obj = _safe_torch_load(args.ckpt, map_location = "cpu")
 
-    for batch in dl:
-        if args.mode == "early":
-            x4, den, _, _ = batch
-            x4 = x4.to(device, non_blocking = True)
-            den = den.to(device, non_blocking = True)
-            pred = model(x4)
+    # Your ckpt is a dict with keys like: model, ema_model (optional), epoch, best_rmse, optimizer, scheduler
+    if isinstance(ckpt_obj, dict) and ("model" in ckpt_obj or "ema_model" in ckpt_obj):
+        if args.use_ema and ("ema_model" in ckpt_obj) and (ckpt_obj["ema_model"] is not None):
+            sd = ckpt_obj["ema_model"]
+            print("[ckpt] loading ema_model weights")
         else:
-            x_rgb, x_t3, den, _, _ = batch
-            x_rgb = x_rgb.to(device, non_blocking = True)
-            x_t3 = x_t3.to(device, non_blocking = True)
-            den = den.to(device, non_blocking = True)
-            pred = model(x_rgb, x_t3)
+            sd = ckpt_obj["model"]
+            print("[ckpt] loading model weights")
+        model.load_state_dict(sd, strict = True)
+        if "epoch" in ckpt_obj:
+            print(f"[ckpt] epoch = {ckpt_obj['epoch']}")
+    else:
+        # If someone saved just a state_dict directly
+        print("[ckpt] loading raw state_dict")
+        model.load_state_dict(ckpt_obj, strict = True)
 
-        if pred.shape[-2:] != den.shape[-2:]:
-            den = F.interpolate(den, size = pred.shape[-2:], mode = "bilinear", align_corners = False)
-
-        c_pred = float(pred.sum().item())
-        c_gt = float(den.sum().item())
-
-        mae += abs(c_pred - c_gt)
-        rmse += (c_pred - c_gt) ** 2
-
-        p2 = pred[0, 0]
-        g2 = den[0, 0]
-        for L in range(4):
-            game[L] += _game(p2, g2, L)
-
-    n = len(dl)
-    mae /= n
-    rmse = math.sqrt(rmse / n)
-    game = [g / n for g in game]
-
-    tag = "adaptive-late" if args.mode == "adaptive_late" else args.mode
-    print(f"[rgbt-{tag}] split = {args.split}  MAE = {mae:.2f}  RMSE = {rmse:.2f}  GAME0 = {game[0]:.2f}  GAME1 = {game[1]:.2f}  GAME2 = {game[2]:.2f}  GAME3 = {game[3]:.2f}")
+    stats = train_rgbt.evaluate(model, loader, device, mode = args.mode)
+    print(f"[eval] split = {args.split}")
+    print(
+        f"[eval] RMSE = {stats['RMSE']:.3f}, MAE = {stats['MAE']:.3f}, "
+        f"GAME0 = {stats['GAME0']:.3f}, GAME1 = {stats['GAME1']:.3f}, "
+        f"GAME2 = {stats['GAME2']:.3f}, GAME3 = {stats['GAME3']:.3f}"
+    )
 
 
 if __name__ == "__main__":

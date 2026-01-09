@@ -1,0 +1,51 @@
+#!/bin/bash
+#PBS -N train_t_e100_count_ema
+#PBS -P personal-kenneth0
+#PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
+#PBS -l walltime=12:00:00
+#PBS -j oe
+
+REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+LOG_DIR=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs
+mkdir -p "$LOG_DIR"
+
+cd "$REPO" || exit 1
+
+TS=$(date +%Y%m%d_%H%M%S)
+LOG_FILE="$LOG_DIR/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.log"
+exec > "$LOG_FILE" 2>&1
+echo "[log] $LOG_FILE"
+
+module purge
+module load pytorch/2.6.0-py3-cu11.8
+export PYTHONPATH="$REPO:$PYTHONPATH"
+
+python -u scripts/train_rgbt.py \
+  --mode t \
+  --data_root ./data/RGBT-CC-CVPR2021 \
+  --split_train train \
+  --split_val val \
+  --epochs 100 \
+  --batch_size 1 \
+  --grad_accum 1 \
+  --lr 1e-5 \
+  --optimizer adam \
+  --weight_decay 1e-4 \
+  --crop_size 224 \
+  --flip_prob 0.5 \
+  --scheduler multistep \
+  --milestones 60,80 \
+  --gamma 0.1 \
+  --img_h 768 \
+  --img_w 1024 \
+  --sigma 15.0 \
+  --out_stride 8 \
+  --num_workers 4 \
+  --amp \
+  --clip_grad 1.0 \
+  --lambda_count 0.1 \
+  --count_loss_rel \
+  --count_loss_beta 1.0 \
+  --ema_decay 0.999 \
+  --ema_eval \
+  --save_dir outputs/t_e100_count_ema
