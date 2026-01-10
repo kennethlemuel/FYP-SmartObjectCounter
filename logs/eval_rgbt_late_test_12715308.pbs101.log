@@ -1,0 +1,4 @@
+[init] device = cuda
+[ckpt] epoch = 1 | best_rmse = 89.85448477708135
+[eval] using EMA weights from checkpoint
+[split test] MAE = 1174199.377, RMSE = 1194931.906, GAME0 = 1174199.377, GAME1 = 1174199.375, GAME2 = 1174199.373, GAME3 = 1174199.375

@@ -1,33 +1,29 @@
 #!/bin/bash
 #PBS -N eval_rgbt_adaptive_late_test
 #PBS -P personal-kenneth0
-#PBS -l select=1:ngpus=1:ncpus=8:mem=40gb
-#PBS -l walltime=01:00:00
+#PBS -l select=1:ngpus=1:ncpus=8:mem=32gb
+#PBS -l walltime=02:00:00
 #PBS -j oe
 
 REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
-LOG_DIR=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs
+LOG_DIR=$REPO/logs
 mkdir -p "$LOG_DIR"
-
 cd "$REPO" || exit 1
-
-TS=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="$LOG_DIR/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.log"
-exec > "$LOG_FILE" 2>&1
-echo "[log] $LOG_FILE"
 
 module purge
 module load pytorch/2.6.0-py3-cu11.8
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
+exec > "$LOG_DIR/${PBS_JOBNAME}_${PBS_JOBID}.log" 2>&1
+
 python -u scripts/eval_rgbt.py \
   --mode adaptive_late \
   --data_root ./data/RGBT-CC-CVPR2021 \
   --split test \
+  --ckpt outputs/rgbt_adaptive_late_e100_count_ema/ckpt_best.pt \
+  --use_ema \
   --img_h 768 \
   --img_w 1024 \
   --sigma 15.0 \
   --out_stride 8 \
-  --ckpt outputs/rgbt_adaptive_late_e100_count_ema/ckpt_best.pt \
-  --use_ema \
   --num_workers 4
