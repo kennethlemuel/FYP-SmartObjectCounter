@@ -1,0 +1,31 @@
+#!/bin/bash
+#PBS -N eval_rgb_test
+#PBS -P personal-kenneth0
+#PBS -l select=1:ngpus=1:ncpus=8:mem=32gb
+#PBS -l walltime=02:00:00
+#PBS -j oe
+
+# RGB
+python scripts/eval_rgbt.py \
+  --mode rgb --split test \
+  --data_root data/RGBT-CC-CVPR2021 \
+  --ckpt outputs/rgb_e100_count_ema/ckpt_last.pt
+
+# T
+python scripts/eval_rgbt.py \
+  --mode t --split test \
+  --data_root data/RGBT-CC-CVPR2021 \
+  --ckpt outputs/t_e100_count_ema/ckpt_last.pt
+
+# Early
+python scripts/eval_rgbt.py \
+  --mode early --split test \
+  --data_root data/RGBT-CC-CVPR2021 \
+  --ckpt outputs/rgbt_early_e100_count_ema/ckpt_last.pt
+
+# Late
+python scripts/eval_rgbt.py \
+  --mode late --split test \
+  --data_root data/RGBT-CC-CVPR2021 \
+  --ckpt outputs/rgbt_late_e100_count_ema/ckpt_last.pt
+
