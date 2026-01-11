@@ -6,6 +6,7 @@ import argparse
 import random
 import re
 import copy
+from contextlib import nullcontext
 from typing import Dict, Tuple, List, Optional
 
 import numpy as np
@@ -13,7 +14,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
-
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _CANDIDATES = [
@@ -63,16 +63,18 @@ def seed_worker(worker_id: int) -> None:
 
 
 def get_device() -> torch.device:
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    return torch.device("cpu")
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def autocast_ctx(device: torch.device, enabled: bool):
+    if not enabled:
+        return nullcontext()
+    if device.type == "cuda":
+        return torch.autocast(device_type = "cuda", dtype = torch.float16, enabled = True)
+    return nullcontext()
 
 
 def resize_density_sum_preserving(den: torch.Tensor, size_hw: Tuple[int, int]) -> torch.Tensor:
-    """
-    den: (B, 1, H, W)
-    size_hw: (H_new, W_new)
-    """
     old_h, old_w = den.shape[-2], den.shape[-1]
     new_h, new_w = int(size_hw[0]), int(size_hw[1])
 
@@ -85,13 +87,7 @@ def resize_density_sum_preserving(den: torch.Tensor, size_hw: Tuple[int, int]) -
 
 
 def game_error(pred: torch.Tensor, gt: torch.Tensor, level: int) -> float:
-    """
-    pred, gt: (B, 1, H, W)
-    GAME(L): split into (2^L x 2^L) grids, sum abs count errors per cell, average across batch.
-    """
     assert pred.ndim == 4 and gt.ndim == 4
-    assert pred.shape[0] == gt.shape[0] and pred.shape[1] == 1 and gt.shape[1] == 1
-
     b, _, h, w = pred.shape
     k = 2 ** int(level)
     gh = max(1, h // k)
@@ -109,22 +105,16 @@ def game_error(pred: torch.Tensor, gt: torch.Tensor, level: int) -> float:
     return float(err.mean().item())
 
 
-def grid_count_loss(pred: torch.Tensor, gt: torch.Tensor, level: int) -> torch.Tensor:
-    """
-    Differentiable GAME-like loss at a chosen level:
-    sum abs count errors per grid cell, averaged across batch.
-    """
-    assert pred.ndim == 4 and gt.ndim == 4
-    assert pred.shape[0] == gt.shape[0] and pred.shape[1] == 1 and gt.shape[1] == 1
-
-    b, _, h, w = pred.shape
+def grid_count_loss(pred_pos: torch.Tensor, gt: torch.Tensor, level: int) -> torch.Tensor:
+    assert pred_pos.ndim == 4 and gt.ndim == 4
+    b, _, h, w = pred_pos.shape
     k = 2 ** int(level)
     gh = max(1, h // k)
     gw = max(1, w // k)
 
     h2 = gh * k
     w2 = gw * k
-    pred_c = pred[:, :, :h2, :w2].contiguous()
+    pred_c = pred_pos[:, :, :h2, :w2].contiguous()
     gt_c = gt[:, :, :h2, :w2].contiguous()
 
     pred_cells = pred_c.view(b, 1, k, gh, k, gw).sum(dim = (3, 5))
@@ -135,10 +125,6 @@ def grid_count_loss(pred: torch.Tensor, gt: torch.Tensor, level: int) -> torch.T
 
 
 def parse_seq_frame(name: str) -> Tuple[str, int]:
-    """
-    Heuristic: split 'xxx_000123.jpg' into ('xxx', 123).
-    If no trailing int, returns (stem, 0).
-    """
     stem = os.path.splitext(os.path.basename(name))[0]
     m = re.match(r"^(.*?)(?:[_-])?(\d+)$", stem)
     if m is None:
@@ -150,10 +136,6 @@ def parse_seq_frame(name: str) -> Tuple[str, int]:
 
 
 class TemporalPairDataset(Dataset):
-    """
-    Wraps a base dataset and returns (sample_a, sample_b) where b is a nearby frame
-    in the same sequence. Builds mapping using base.ids (no image loading).
-    """
     def __init__(self, base: Dataset, pair_delta: int = 1):
         self.base = base
         self.pair_delta = max(1, int(pair_delta))
@@ -194,10 +176,6 @@ def hflip(x: torch.Tensor) -> torch.Tensor:
 
 
 def crop_params(h: int, w: int, crop: int, stride: int) -> Tuple[int, int, int, int]:
-    """
-    IMPORTANT: choose crop top-left aligned to stride so that (pixel crop) and (out-grid crop)
-    are consistent with pts_out and density reconstruction.
-    """
     ch = min(crop, h)
     cw = min(crop, w)
 
@@ -209,56 +187,14 @@ def crop_params(h: int, w: int, crop: int, stride: int) -> Tuple[int, int, int, 
     ch_out = ch // stride
     cw_out = cw // stride
 
-    if h_out <= ch_out:
-        oy0 = 0
-    else:
-        oy0 = random.randint(0, h_out - ch_out)
-
-    if w_out <= cw_out:
-        ox0 = 0
-    else:
-        ox0 = random.randint(0, w_out - cw_out)
+    oy0 = 0 if h_out <= ch_out else random.randint(0, h_out - ch_out)
+    ox0 = 0 if w_out <= cw_out else random.randint(0, w_out - cw_out)
 
     y0 = oy0 * stride
     x0 = ox0 * stride
     y1 = y0 + ch
     x1 = x0 + cw
     return y0, y1, x0, x1
-
-
-def centered_crop_params(
-    h: int,
-    w: int,
-    crop: int,
-    stride: int,
-    pts_out: Optional[torch.Tensor],
-    center_prob: float,
-) -> Tuple[int, int, int, int]:
-    """
-    With probability center_prob, sample a crop centered around a random GT point (in out-grid coords).
-    Falls back to uniform crop otherwise.
-    """
-    ch = min(crop, h)
-    cw = min(crop, w)
-
-    ch = max(stride, (ch // stride) * stride)
-    cw = max(stride, (cw // stride) * stride)
-
-    if pts_out is not None and pts_out.numel() > 0 and random.random() < float(center_prob):
-        j = random.randint(0, int(pts_out.shape[0]) - 1)
-        x_px = int(float(pts_out[j, 0].item()) * float(stride))
-        y_px = int(float(pts_out[j, 1].item()) * float(stride))
-
-        y0 = max(0, min(h - ch, y_px - (ch // 2)))
-        x0 = max(0, min(w - cw, x_px - (cw // 2)))
-
-        y0 = (y0 // stride) * stride
-        x0 = (x0 // stride) * stride
-        y1 = y0 + ch
-        x1 = x0 + cw
-        return y0, y1, x0, x1
-
-    return crop_params(h, w, crop, stride)
 
 
 class TrainAugment(Dataset):
@@ -270,15 +206,13 @@ class TrainAugment(Dataset):
         crop_size: int = 224,
         flip_prob: float = 0.5,
         stride: int = 8,
-        center_prob: float = 0.0,
     ):
         self.base = base
         self.mode = mode
         self.crop_size = int(crop_size)
         self.flip_prob = float(flip_prob)
         self.stride = int(stride)
-        self.center_prob = float(center_prob)
-        self.sigma_out = max(1.0, float(sigma) / float(self.stride))
+        self.sigma_out = float(sigma) / float(self.stride)
 
     def __len__(self) -> int:
         return len(self.base)
@@ -325,70 +259,38 @@ class TrainAugment(Dataset):
     def _augment_one(self, sample):
         do_flip = (random.random() < self.flip_prob)
 
-        if self.mode == "rgb":
+        if self.mode in ["rgb", "t"]:
             x, _den_full, pts_out, name, _gt_count = sample
             _, h, w = x.shape
-            y0, y1, x0, x1 = centered_crop_params(
-                h, w, self.crop_size, self.stride, pts_out, self.center_prob
-            )
-
+            y0, y1, x0, x1 = crop_params(h, w, self.crop_size, self.stride)
             x = x[:, y0:y1, x0:x1]
             den = self._crop_den_from_points(pts_out, y0, y1, x0, x1)
-
             if do_flip:
                 x = hflip(x)
                 den = hflip(den)
-
-            return x.contiguous(), den.contiguous(), name, float(den.sum().item())
-
-        if self.mode == "t":
-            x, _den_full, pts_out, name, _gt_count = sample
-            _, h, w = x.shape
-            y0, y1, x0, x1 = centered_crop_params(
-                h, w, self.crop_size, self.stride, pts_out, self.center_prob
-            )
-
-            x = x[:, y0:y1, x0:x1]
-            den = self._crop_den_from_points(pts_out, y0, y1, x0, x1)
-
-            if do_flip:
-                x = hflip(x)
-                den = hflip(den)
-
             return x.contiguous(), den.contiguous(), name, float(den.sum().item())
 
         if self.mode == "early":
             x4, _den_full, pts_out, name, _gt_count = sample
             _, h, w = x4.shape
-            y0, y1, x0, x1 = centered_crop_params(
-                h, w, self.crop_size, self.stride, pts_out, self.center_prob
-            )
-
+            y0, y1, x0, x1 = crop_params(h, w, self.crop_size, self.stride)
             x4 = x4[:, y0:y1, x0:x1]
             den = self._crop_den_from_points(pts_out, y0, y1, x0, x1)
-
             if do_flip:
                 x4 = hflip(x4)
                 den = hflip(den)
-
             return x4.contiguous(), den.contiguous(), name, float(den.sum().item())
 
-        # late / adaptive_late
         x_rgb, x_t3, _den_full, pts_out, name, _gt_count = sample
         _, h, w = x_rgb.shape
-        y0, y1, x0, x1 = centered_crop_params(
-            h, w, self.crop_size, self.stride, pts_out, self.center_prob
-        )
-
+        y0, y1, x0, x1 = crop_params(h, w, self.crop_size, self.stride)
         x_rgb = x_rgb[:, y0:y1, x0:x1]
         x_t3 = x_t3[:, y0:y1, x0:x1]
         den = self._crop_den_from_points(pts_out, y0, y1, x0, x1)
-
         if do_flip:
             x_rgb = hflip(x_rgb)
             x_t3 = hflip(x_t3)
             den = hflip(den)
-
         return x_rgb.contiguous(), x_t3.contiguous(), den.contiguous(), name, float(den.sum().item())
 
     def __getitem__(self, idx: int):
@@ -429,19 +331,16 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, mode: s
             x = x.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
             pred = model(x)
-
         elif mode == "t":
             x, den, _name, _gtc = batch
             x = x.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
             pred = model(x)
-
         elif mode == "early":
             x4, den, _name, _gtc = batch
             x4 = x4.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
             pred = model(x4)
-
         else:
             x_rgb, x_t3, den, _name, _gtc = batch
             x_rgb = x_rgb.to(device, non_blocking = True)
@@ -467,10 +366,7 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, mode: s
         n += 1
 
     n = max(1, n)
-    out = {
-        "MAE": mae_acc / n,
-        "RMSE": math.sqrt(rmse_acc / n),
-    }
+    out = {"MAE": mae_acc / n, "RMSE": math.sqrt(rmse_acc / n)}
     for L in game_levels:
         out[f"GAME{L}"] = game_acc[L] / n
     return out
@@ -500,7 +396,6 @@ def illumination_gate_loss(aux: Dict[str, torch.Tensor], tau: float) -> torch.Te
 
     denom = max(1e-6, (1.0 - tau))
     target = ((lum - tau) / denom).clamp(0.0, 1.0)
-
     return F.mse_loss(gate, target)
 
 
@@ -516,8 +411,8 @@ def ema_update(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
             v_ema.copy_(v)
 
 
-def _count_loss(pred: torch.Tensor, den: torch.Tensor, rel: bool, beta: float) -> torch.Tensor:
-    pred_f = pred.float()
+def _count_loss(pred_pos: torch.Tensor, den: torch.Tensor, rel: bool, beta: float) -> torch.Tensor:
+    pred_f = pred_pos.float()
     den_f = den.float()
 
     c_pred = pred_f.sum(dim = (1, 2, 3))
@@ -558,31 +453,20 @@ def train_one_epoch(
     aux_ramp = 1.0 if warm == 0 else min(1.0, float(epoch) / float(warm))
 
     def forward_single(sample):
-        if args.mode == "rgb":
+        if args.mode in ["rgb", "t"]:
             x, den, _name, _gtc = sample
             x = x.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
-            with torch.autocast(device_type = "cuda", dtype = torch.float16, enabled = bool(args.amp)):
-                pred = model(x)
-                pred = F.relu(pred)
-            return pred, den, None
-
-        if args.mode == "t":
-            x, den, _name, _gtc = sample
-            x = x.to(device, non_blocking = True)
-            den = den.to(device, non_blocking = True)
-            with torch.autocast(device_type = "cuda", dtype = torch.float16, enabled = bool(args.amp)):
-                pred = model(x)
-                pred = F.relu(pred)
+            with autocast_ctx(device, enabled = bool(args.amp)):
+                pred = model(x)  # IMPORTANT: no ReLU here
             return pred, den, None
 
         if args.mode == "early":
             x4, den, _name, _gtc = sample
             x4 = x4.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
-            with torch.autocast(device_type = "cuda", dtype = torch.float16, enabled = bool(args.amp)):
-                pred = model(x4)
-                pred = F.relu(pred)
+            with autocast_ctx(device, enabled = bool(args.amp)):
+                pred = model(x4)  # IMPORTANT: no ReLU here
             return pred, den, None
 
         x_rgb, x_t3, den, _name, _gtc = sample
@@ -591,14 +475,12 @@ def train_one_epoch(
         den = den.to(device, non_blocking = True)
 
         if args.mode == "adaptive_late":
-            with torch.autocast(device_type = "cuda", dtype = torch.float16, enabled = bool(args.amp)):
-                pred, aux = model.forward_with_aux(x_rgb, x_t3)
-                pred = F.relu(pred)
+            with autocast_ctx(device, enabled = bool(args.amp)):
+                pred, aux = model.forward_with_aux(x_rgb, x_t3)  # IMPORTANT: no ReLU here
             return pred, den, aux
 
-        with torch.autocast(device_type = "cuda", dtype = torch.float16, enabled = bool(args.amp)):
-            pred = model(x_rgb, x_t3)
-            pred = F.relu(pred)
+        with autocast_ctx(device, enabled = bool(args.amp)):
+            pred = model(x_rgb, x_t3)  # IMPORTANT: no ReLU here
         return pred, den, None
 
     for batch in loader:
@@ -618,6 +500,9 @@ def train_one_epoch(
             if pred_b.shape[-2:] != den_b.shape[-2:]:
                 den_b = resize_density_sum_preserving(den_b, pred_b.shape[-2:])
 
+            pred_a_pos = F.relu(pred_a)
+            pred_b_pos = F.relu(pred_b)
+
             with torch.autocast(device_type = "cuda", enabled = False):
                 base_a = mse(pred_a.float(), den_a.float())
                 base_b = mse(pred_b.float(), den_b.float())
@@ -625,20 +510,20 @@ def train_one_epoch(
 
                 count_loss = torch.zeros((), device = device, dtype = torch.float32)
                 if args.lambda_count > 0.0:
-                    cl_a = _count_loss(pred_a, den_a, rel = bool(args.count_loss_rel), beta = args.count_loss_beta)
-                    cl_b = _count_loss(pred_b, den_b, rel = bool(args.count_loss_rel), beta = args.count_loss_beta)
+                    cl_a = _count_loss(pred_a_pos, den_a, rel = bool(args.count_loss_rel), beta = args.count_loss_beta)
+                    cl_b = _count_loss(pred_b_pos, den_b, rel = bool(args.count_loss_rel), beta = args.count_loss_beta)
                     count_loss = 0.5 * (cl_a + cl_b)
 
                 game_loss = torch.zeros((), device = device, dtype = torch.float32)
                 if args.lambda_game > 0.0:
-                    gl_a = grid_count_loss(pred_a.float(), den_a.float(), level = int(args.game_level))
-                    gl_b = grid_count_loss(pred_b.float(), den_b.float(), level = int(args.game_level))
+                    gl_a = grid_count_loss(pred_a_pos.float(), den_a.float(), level = int(args.game_level))
+                    gl_b = grid_count_loss(pred_b_pos.float(), den_b.float(), level = int(args.game_level))
                     game_loss = 0.5 * (gl_a + gl_b)
 
                 temp_loss = torch.zeros((), device = device, dtype = torch.float32)
                 if args.lambda_temp > 0.0:
-                    cpa = pred_a.float().sum(dim = (1, 2, 3))
-                    cpb = pred_b.float().sum(dim = (1, 2, 3))
+                    cpa = pred_a_pos.float().sum(dim = (1, 2, 3))
+                    cpb = pred_b_pos.float().sum(dim = (1, 2, 3))
                     cga = den_a.float().sum(dim = (1, 2, 3))
                     cgb = den_b.float().sum(dim = (1, 2, 3))
                     delta_pred = (cpb - cpa)
@@ -672,16 +557,18 @@ def train_one_epoch(
             if pred.shape[-2:] != den.shape[-2:]:
                 den = resize_density_sum_preserving(den, pred.shape[-2:])
 
+            pred_pos = F.relu(pred)
+
             with torch.autocast(device_type = "cuda", enabled = False):
                 base_loss = mse(pred.float(), den.float())
 
                 count_loss = torch.zeros((), device = device, dtype = torch.float32)
                 if args.lambda_count > 0.0:
-                    count_loss = _count_loss(pred, den, rel = bool(args.count_loss_rel), beta = args.count_loss_beta)
+                    count_loss = _count_loss(pred_pos, den, rel = bool(args.count_loss_rel), beta = args.count_loss_beta)
 
                 game_loss = torch.zeros((), device = device, dtype = torch.float32)
                 if args.lambda_game > 0.0:
-                    game_loss = grid_count_loss(pred.float(), den.float(), level = int(args.game_level))
+                    game_loss = grid_count_loss(pred_pos.float(), den.float(), level = int(args.game_level))
 
                 temp_loss = torch.zeros((), device = device, dtype = torch.float32)
 
@@ -778,6 +665,20 @@ def save_ckpt(
     torch.save(obj, path)
 
 
+def load_resume(path: str, model: nn.Module, optimizer, scheduler, ema_model: Optional[nn.Module]):
+    ck = torch.load(path, map_location = "cpu")
+    model.load_state_dict(ck["model"], strict = True)
+    if "optimizer" in ck and optimizer is not None:
+        optimizer.load_state_dict(ck["optimizer"])
+    if scheduler is not None and ck.get("scheduler", None) is not None:
+        scheduler.load_state_dict(ck["scheduler"])
+    if ema_model is not None and ("ema_model" in ck):
+        ema_model.load_state_dict(ck["ema_model"], strict = True)
+    start_epoch = int(ck.get("epoch", 0))
+    best_rmse = float(ck.get("best_rmse", float("inf")))
+    return start_epoch, best_rmse
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices = ["rgb", "t", "early", "late", "adaptive_late"], required = True)
@@ -795,17 +696,19 @@ def main():
     ap.add_argument("--batch_size", type = int, default = 1)
     ap.add_argument("--grad_accum", type = int, default = 1)
 
+    # SOTA-aligned defaults
     ap.add_argument("--lr", type = float, default = 1e-5)
     ap.add_argument("--weight_decay", type = float, default = 1e-4)
     ap.add_argument("--optimizer", choices = ["adam", "adamw"], default = "adam")
 
-    ap.add_argument("--scheduler", choices = ["none", "multistep"], default = "multistep")
+    # Scheduler is not mandated by the paper, so default to none for cleaner comparability
+    ap.add_argument("--scheduler", choices = ["none", "multistep"], default = "none")
     ap.add_argument("--milestones", type = str, default = "200,300")
     ap.add_argument("--gamma", type = float, default = 0.1)
 
+    # SOTA-aligned augmentation defaults
     ap.add_argument("--crop_size", type = int, default = 224)
     ap.add_argument("--flip_prob", type = float, default = 0.5)
-    ap.add_argument("--center_prob", type = float, default = 0.0)
 
     ap.add_argument("--amp", action = "store_true")
     ap.add_argument("--clip_grad", type = float, default = 0.0)
@@ -814,27 +717,25 @@ def main():
     ap.add_argument("--seed", type = int, default = 42)
 
     ap.add_argument("--save_dir", required = True)
+    ap.add_argument("--resume", type = str, default = "")
 
-    # Novelty controls
+    # Novelty controls (keep off for baselines unless doing ablations)
     ap.add_argument("--temporal_pair", action = "store_true")
     ap.add_argument("--pair_delta", type = int, default = 1)
-    ap.add_argument("--lambda_temp", type = float, default = 0.05)
+    ap.add_argument("--lambda_temp", type = float, default = 0.0)
     ap.add_argument("--normalize_temp_loss", action = "store_true")
     ap.add_argument("--aux_warmup_epochs", type = int, default = 10)
 
-    ap.add_argument("--lambda_illum", type = float, default = 0.05)
+    ap.add_argument("--lambda_illum", type = float, default = 0.0)
     ap.add_argument("--illum_tau", type = float, default = 0.35)
 
-    # Count loss (helps MAE/RMSE directly)
     ap.add_argument("--lambda_count", type = float, default = 0.0)
     ap.add_argument("--count_loss_rel", action = "store_true")
     ap.add_argument("--count_loss_beta", type = float, default = 1.0)
 
-    # GAME-like grid count loss (targets GAME)
     ap.add_argument("--lambda_game", type = float, default = 0.0)
     ap.add_argument("--game_level", type = int, default = 1)
 
-    # EMA (stabilizes validation, often improves metrics)
     ap.add_argument("--ema_decay", type = float, default = 0.0)  # 0 disables
     ap.add_argument("--ema_eval", action = "store_true")
 
@@ -853,48 +754,21 @@ def main():
     img_size = (args.img_h, args.img_w)
 
     if args.mode == "rgb":
-        base_train = RGBTCC_RGBDataset(
-            args.data_root, args.split_train, img_size, args.sigma,
-            return_pts = True, out_stride = args.out_stride
-        )
-        base_val = RGBTCC_RGBDataset(
-            args.data_root, args.split_val, img_size, args.sigma,
-            return_pts = False, out_stride = args.out_stride
-        )
-
+        base_train = RGBTCC_RGBDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
+        base_val = RGBTCC_RGBDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False, out_stride = args.out_stride)
     elif args.mode == "t":
-        base_train = RGBTCC_TDataset(
-            args.data_root, args.split_train, img_size, args.sigma,
-            return_pts = True, out_stride = args.out_stride
-        )
-        base_val = RGBTCC_TDataset(
-            args.data_root, args.split_val, img_size, args.sigma,
-            return_pts = False, out_stride = args.out_stride
-        )
-
+        base_train = RGBTCC_TDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
+        base_val = RGBTCC_TDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False, out_stride = args.out_stride)
     elif args.mode == "early":
-        base_train = RGBTCC_EarlyFusionDataset(
-            args.data_root, args.split_train, img_size, args.sigma,
-            return_pts = True, out_stride = args.out_stride
-        )
-        base_val = RGBTCC_EarlyFusionDataset(
-            args.data_root, args.split_val, img_size, args.sigma,
-            return_pts = False, out_stride = args.out_stride
-        )
-
+        base_train = RGBTCC_EarlyFusionDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
+        base_val = RGBTCC_EarlyFusionDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False, out_stride = args.out_stride)
     else:
-        base_train = RGBTCC_PairedDataset(
-            args.data_root, args.split_train, img_size, args.sigma,
-            return_pts = True, out_stride = args.out_stride
-        )
-        base_val = RGBTCC_PairedDataset(
-            args.data_root, args.split_val, img_size, args.sigma,
-            return_pts = False, out_stride = args.out_stride
-        )
+        base_train = RGBTCC_PairedDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
+        base_val = RGBTCC_PairedDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False, out_stride = args.out_stride)
 
     if args.temporal_pair:
         if args.mode != "adaptive_late":
-            print("[warn] temporal_pair is mainly intended for adaptive_late novelty. It will still run, interpret critically.")
+            print("[warn] temporal_pair is mainly intended for adaptive_late. Using it for baselines is an ablation.")
         base_train = TemporalPairDataset(base_train, pair_delta = args.pair_delta)
 
     train_ds = TrainAugment(
@@ -904,7 +778,6 @@ def main():
         crop_size = args.crop_size,
         flip_prob = args.flip_prob,
         stride = args.out_stride,
-        center_prob = args.center_prob,
     )
 
     if args.num_workers < 0:
@@ -944,14 +817,23 @@ def main():
     optimizer = make_optimizer(args, model)
     scheduler = make_scheduler(args, optimizer)
 
-    try:
-        scaler = torch.amp.GradScaler("cuda", enabled = bool(args.amp))
-    except Exception:
-        scaler = torch.cuda.amp.GradScaler(enabled = bool(args.amp))
+    if device.type == "cuda":
+        try:
+            scaler = torch.amp.GradScaler("cuda", enabled = bool(args.amp))
+        except Exception:
+            scaler = torch.cuda.amp.GradScaler(enabled = bool(args.amp))
+    else:
+        scaler = torch.cuda.amp.GradScaler(enabled = False)
 
+    start_epoch = 0
     best_rmse = float("inf")
-    for epoch in range(1, args.epochs + 1):
+    if args.resume and os.path.isfile(args.resume):
+        start_epoch, best_rmse = load_resume(args.resume, model, optimizer, scheduler, ema_model)
+        print(f"[resume] from {args.resume} | start_epoch = {start_epoch} | best_rmse = {best_rmse}")
+
+    for epoch in range(start_epoch + 1, args.epochs + 1):
         t0 = time.time()
+
         train_stats = train_one_epoch(
             model, train_loader, device, optimizer, scaler, args, epoch = epoch, ema_model = ema_model
         )
@@ -965,7 +847,7 @@ def main():
         dt = time.time() - t0
         lr_now = optimizer.param_groups[0]["lr"]
 
-        msg = (
+        print(
             f"[epoch {epoch:03d}/{args.epochs}] "
             f"lr = {lr_now:.2e} | "
             f"train loss = {train_stats['loss']:.4f} "
@@ -976,19 +858,12 @@ def main():
             f"GAME2 = {val_stats['GAME2']:.3f}, GAME3 = {val_stats['GAME3']:.3f} | "
             f"time = {dt:.1f}s"
         )
-        print(msg)
 
-        save_ckpt(
-            os.path.join(args.save_dir, "ckpt_last.pt"),
-            model, optimizer, scheduler, epoch, best_rmse, ema_model = ema_model
-        )
+        save_ckpt(os.path.join(args.save_dir, "ckpt_last.pt"), model, optimizer, scheduler, epoch, best_rmse, ema_model = ema_model)
 
         if val_stats["RMSE"] < best_rmse:
             best_rmse = float(val_stats["RMSE"])
-            save_ckpt(
-                os.path.join(args.save_dir, "ckpt_best.pt"),
-                model, optimizer, scheduler, epoch, best_rmse, ema_model = ema_model
-            )
+            save_ckpt(os.path.join(args.save_dir, "ckpt_best.pt"), model, optimizer, scheduler, epoch, best_rmse, ema_model = ema_model)
 
     print(f"[done] best RMSE = {best_rmse:.3f}")
 

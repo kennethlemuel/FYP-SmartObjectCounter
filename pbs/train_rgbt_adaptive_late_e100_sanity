@@ -30,9 +30,7 @@ python -u scripts/train_rgbt.py \
   --weight_decay 1e-4 \
   --crop_size 224 \
   --flip_prob 0.5 \
-  --scheduler multistep \
-  --milestones 60,80 \
-  --gamma 0.1 \
+  --scheduler none \
   --img_h 768 \
   --img_w 1024 \
   --sigma 15.0 \
@@ -40,18 +38,12 @@ python -u scripts/train_rgbt.py \
   --num_workers 4 \
   --amp \
   --clip_grad 1.0 \
-  --temporal_pair \
   --pair_delta 1 \
-  --lambda_temp 0.05 \
   --normalize_temp_loss \
   --aux_warmup_epochs 10 \
-  --lambda_illum 0.05 \
   --illum_tau 0.35 \
-  --lambda_count 0.1 \
-  --count_loss_rel \
   --count_loss_beta 1.0 \
-  --ema_decay 0.999 \
-  --ema_eval \
+  --ema_decay 0.0 \
   --save_dir outputs/rgbt_adaptive_late_e100_count_ema \
   > "${LOGDIR}/train_rgbt_adaptive_late_e100_count_ema_${JOBTAG}.out" \
   2> "${LOGDIR}/train_rgbt_adaptive_late_e100_count_ema_${JOBTAG}.err"
