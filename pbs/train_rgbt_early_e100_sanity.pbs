@@ -1,23 +1,32 @@
 #!/bin/bash
-#PBS -N train_rgbt_early_e100_count_ema
+#PBS -N train_rgbt_early_e100_sanity
 #PBS -P personal-kenneth0
 #PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
 #PBS -l walltime=12:00:00
 #PBS -j oe
 
+set -euo pipefail
+
 REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
-LOG_DIR=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs
+LOG_DIR="$REPO/logs"
 mkdir -p "$LOG_DIR"
 
 cd "$REPO" || exit 1
 
+: "${PBS_JOBID:=manual}"
+: "${PBS_JOBNAME:=train_rgbt_early_e100_sanity}"
+
 TS=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="$LOG_DIR/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.log"
 exec > "$LOG_FILE" 2>&1
+
 echo "[log] $LOG_FILE"
+echo "[job] name=$PBS_JOBNAME id=$PBS_JOBID host=$(hostname) time=$(date)"
 
 module purge
 module load pytorch/2.6.0-py3-cu11.8
+
+export PYTHONUNBUFFERED=1
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
 python -u scripts/train_rgbt.py \
@@ -41,6 +50,5 @@ python -u scripts/train_rgbt.py \
   --num_workers 4 \
   --amp \
   --clip_grad 1.0 \
-  --count_loss_beta 1.0 \
   --ema_decay 0.0 \
-  --save_dir outputs/rgbt_early_e100_count_ema
+  --save_dir outputs/rgbt_early_e100_sanity
