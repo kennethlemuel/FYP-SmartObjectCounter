@@ -1,871 +1,452 @@
 import os
-import sys
-import time
 import math
-import argparse
+import time
 import random
-import re
-import copy
-from contextlib import nullcontext
-from typing import Dict, Tuple, List, Optional
+import argparse
+from dataclasses import dataclass
+from typing import Dict, Tuple, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_CANDIDATES = [
-    _THIS_DIR,
-    os.path.dirname(_THIS_DIR),
-    os.path.dirname(os.path.dirname(_THIS_DIR)),
-]
-PROJECT_ROOT = None
-for c in _CANDIDATES:
-    if os.path.isdir(os.path.join(c, "models")) and os.path.isdir(os.path.join(c, "datasets")):
-        PROJECT_ROOT = c
-        break
-if PROJECT_ROOT is None:
-    PROJECT_ROOT = os.path.dirname(_THIS_DIR)
-
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
+#Models
 from models.csrnet import CSRNet
+from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
 from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
 
-from datasets.rgbt_cc import (
-    RGBTCC_RGBDataset,
-    RGBTCC_TDataset,
-    RGBTCC_PairedDataset,
-    RGBTCC_EarlyFusionDataset,
-    density_from_points,
-)
+#Dataset
+from datasets.rgbt_cc import RGBTCCDset, RGBTCCBase, build_splits_rgbt_cc
 
 
-def set_seed(seed: int, deterministic: bool = True) -> None:
+def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    if deterministic:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    #Determinism knobs
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    try:
+        torch.use_deterministic_algorithms(True)
+    except Exception:
+        pass
 
 
 def seed_worker(worker_id: int) -> None:
-    worker_seed = (torch.initial_seed() + worker_id) % 2**32
+    #Ensure each worker has deterministic, distinct seed
+    worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
 
-def get_device() -> torch.device:
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def _autocast_device_type(device: torch.device) -> str:
+    return "cuda" if device.type == "cuda" else "cpu"
 
 
-def autocast_ctx(device: torch.device, enabled: bool):
-    if not enabled:
-        return nullcontext()
-    if device.type == "cuda":
-        return torch.autocast(device_type = "cuda", dtype = torch.float16, enabled = True)
-    return nullcontext()
-
-
-def resize_density_sum_preserving(den: torch.Tensor, size_hw: Tuple[int, int]) -> torch.Tensor:
-    old_h, old_w = den.shape[-2], den.shape[-1]
-    new_h, new_w = int(size_hw[0]), int(size_hw[1])
-
-    if old_h == new_h and old_w == new_w:
-        return den
-
-    den_rs = F.interpolate(den, size = (new_h, new_w), mode = "bilinear", align_corners = False)
-    den_rs = den_rs * (old_h * old_w) / float(new_h * new_w)
-    return den_rs
-
-
-def game_error(pred: torch.Tensor, gt: torch.Tensor, level: int) -> float:
-    assert pred.ndim == 4 and gt.ndim == 4
-    b, _, h, w = pred.shape
-    k = 2 ** int(level)
-    gh = max(1, h // k)
-    gw = max(1, w // k)
-
-    h2 = gh * k
-    w2 = gw * k
-    pred_c = pred[:, :, :h2, :w2].contiguous()
-    gt_c = gt[:, :, :h2, :w2].contiguous()
-
-    pred_cells = pred_c.view(b, 1, k, gh, k, gw).sum(dim = (3, 5))
-    gt_cells = gt_c.view(b, 1, k, gh, k, gw).sum(dim = (3, 5))
-
-    err = torch.abs(pred_cells - gt_cells).sum(dim = (2, 3))
-    return float(err.mean().item())
-
-
-def grid_count_loss(pred_pos: torch.Tensor, gt: torch.Tensor, level: int) -> torch.Tensor:
-    assert pred_pos.ndim == 4 and gt.ndim == 4
-    b, _, h, w = pred_pos.shape
-    k = 2 ** int(level)
-    gh = max(1, h // k)
-    gw = max(1, w // k)
-
-    h2 = gh * k
-    w2 = gw * k
-    pred_c = pred_pos[:, :, :h2, :w2].contiguous()
-    gt_c = gt[:, :, :h2, :w2].contiguous()
-
-    pred_cells = pred_c.view(b, 1, k, gh, k, gw).sum(dim = (3, 5))
-    gt_cells = gt_c.view(b, 1, k, gh, k, gw).sum(dim = (3, 5))
-
-    err = torch.abs(pred_cells - gt_cells).sum(dim = (2, 3))
-    return err.mean()
-
-
-def parse_seq_frame(name: str) -> Tuple[str, int]:
-    stem = os.path.splitext(os.path.basename(name))[0]
-    m = re.match(r"^(.*?)(?:[_-])?(\d+)$", stem)
-    if m is None:
-        return stem, 0
-    seq = m.group(1)
-    seq = seq if len(seq) > 0 else stem
-    frame = int(m.group(2))
-    return seq, frame
-
-
-class TemporalPairDataset(Dataset):
-    def __init__(self, base: Dataset, pair_delta: int = 1):
-        self.base = base
-        self.pair_delta = max(1, int(pair_delta))
-
-        if not hasattr(self.base, "ids"):
-            raise ValueError("Base dataset must have .ids for temporal_pair without expensive preloading.")
-
-        ids = list(self.base.ids)
-
-        seq_to: Dict[str, List[Tuple[int, int]]] = {}
-        for i, sid in enumerate(ids):
-            seq, frame = parse_seq_frame(f"{sid}.jpg")
-            seq_to.setdefault(seq, []).append((frame, i))
-
-        self._pair_index: Dict[int, int] = {}
-        for _seq, arr in seq_to.items():
-            arr_sorted = sorted(arr, key = lambda x: x[0])
-            idxs = [i for _, i in arr_sorted]
-            n = len(idxs)
-            for pos, idx in enumerate(idxs):
-                j_pos = pos + self.pair_delta
-                if j_pos >= n:
-                    j_pos = pos - self.pair_delta
-                if j_pos < 0 or j_pos >= n:
-                    j_pos = pos
-                self._pair_index[idx] = idxs[j_pos]
-
-    def __len__(self) -> int:
-        return len(self.base)
-
-    def __getitem__(self, idx: int):
-        j = self._pair_index.get(idx, idx)
-        return self.base[idx], self.base[j]
-
-
-def hflip(x: torch.Tensor) -> torch.Tensor:
-    return torch.flip(x, dims = [-1])
-
-
-def crop_params(h: int, w: int, crop: int, stride: int) -> Tuple[int, int, int, int]:
-    ch = min(crop, h)
-    cw = min(crop, w)
-
-    ch = max(stride, (ch // stride) * stride)
-    cw = max(stride, (cw // stride) * stride)
-
-    h_out = h // stride
-    w_out = w // stride
-    ch_out = ch // stride
-    cw_out = cw // stride
-
-    oy0 = 0 if h_out <= ch_out else random.randint(0, h_out - ch_out)
-    ox0 = 0 if w_out <= cw_out else random.randint(0, w_out - cw_out)
-
-    y0 = oy0 * stride
-    x0 = ox0 * stride
-    y1 = y0 + ch
-    x1 = x0 + cw
-    return y0, y1, x0, x1
-
-
-class TrainAugment(Dataset):
-    def __init__(
-        self,
-        base: Dataset,
-        mode: str,
-        sigma: float,
-        crop_size: int = 224,
-        flip_prob: float = 0.5,
-        stride: int = 8,
-    ):
-        self.base = base
-        self.mode = mode
-        self.crop_size = int(crop_size)
-        self.flip_prob = float(flip_prob)
-        self.stride = int(stride)
-        self.sigma_out = float(sigma) / float(self.stride)
-
-    def __len__(self) -> int:
-        return len(self.base)
-
-    def _crop_den_from_points(
-        self,
-        pts_out: torch.Tensor,
-        y0: int,
-        y1: int,
-        x0: int,
-        x1: int,
-    ) -> torch.Tensor:
-        oy0 = int(y0 // self.stride)
-        oy1 = int(y1 // self.stride)
-        ox0 = int(x0 // self.stride)
-        ox1 = int(x1 // self.stride)
-
-        h_out = max(1, oy1 - oy0)
-        w_out = max(1, ox1 - ox0)
-
-        if pts_out.numel() == 0:
-            dm = np.zeros((h_out, w_out), dtype = np.float32)
-            return torch.from_numpy(dm)[None, ...]
-
-        pts = pts_out.clone()
-        m = (pts[:, 0] >= ox0) & (pts[:, 0] < ox1) & (pts[:, 1] >= oy0) & (pts[:, 1] < oy1)
-        pts_c = pts[m]
-        if pts_c.numel() == 0:
-            dm = np.zeros((h_out, w_out), dtype = np.float32)
-            return torch.from_numpy(dm)[None, ...]
-
-        pts_c[:, 0] -= float(ox0)
-        pts_c[:, 1] -= float(oy0)
-
-        dm = density_from_points(pts_c.cpu().numpy(), h_out, w_out, sigma = self.sigma_out)
-
-        gt_n = float(pts_c.shape[0])
-        s = float(dm.sum())
-        if gt_n > 0.0 and s > 0.0:
-            dm = dm * (gt_n / s)
-
-        return torch.from_numpy(dm.astype(np.float32, copy = False))[None, ...]
-
-    def _augment_one(self, sample):
-        do_flip = (random.random() < self.flip_prob)
-
-        if self.mode in ["rgb", "t"]:
-            x, _den_full, pts_out, name, _gt_count = sample
-            _, h, w = x.shape
-            y0, y1, x0, x1 = crop_params(h, w, self.crop_size, self.stride)
-            x = x[:, y0:y1, x0:x1]
-            den = self._crop_den_from_points(pts_out, y0, y1, x0, x1)
-            if do_flip:
-                x = hflip(x)
-                den = hflip(den)
-            return x.contiguous(), den.contiguous(), name, float(den.sum().item())
-
-        if self.mode == "early":
-            x4, _den_full, pts_out, name, _gt_count = sample
-            _, h, w = x4.shape
-            y0, y1, x0, x1 = crop_params(h, w, self.crop_size, self.stride)
-            x4 = x4[:, y0:y1, x0:x1]
-            den = self._crop_den_from_points(pts_out, y0, y1, x0, x1)
-            if do_flip:
-                x4 = hflip(x4)
-                den = hflip(den)
-            return x4.contiguous(), den.contiguous(), name, float(den.sum().item())
-
-        x_rgb, x_t3, _den_full, pts_out, name, _gt_count = sample
-        _, h, w = x_rgb.shape
-        y0, y1, x0, x1 = crop_params(h, w, self.crop_size, self.stride)
-        x_rgb = x_rgb[:, y0:y1, x0:x1]
-        x_t3 = x_t3[:, y0:y1, x0:x1]
-        den = self._crop_den_from_points(pts_out, y0, y1, x0, x1)
-        if do_flip:
-            x_rgb = hflip(x_rgb)
-            x_t3 = hflip(x_t3)
-            den = hflip(den)
-        return x_rgb.contiguous(), x_t3.contiguous(), den.contiguous(), name, float(den.sum().item())
-
-    def __getitem__(self, idx: int):
-        item = self.base[idx]
-        if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], tuple):
-            a = self._augment_one(item[0])
-            b = self._augment_one(item[1])
-            return a, b
-        return self._augment_one(item)
-
-
-def build_model(mode: str, load_imagenet: bool = True) -> nn.Module:
-    if mode == "rgb":
-        return CSRNet(load_imagenet = load_imagenet)
-    if mode == "t":
-        return CSRNet(load_imagenet = load_imagenet)
-    if mode == "early":
-        from models.rgbt_early import CSRNetRGBT_Early
-        return CSRNetRGBT_Early(load_imagenet = load_imagenet)
-    if mode == "late":
-        return CSRNetRGBT_Late(load_imagenet = load_imagenet)
-    if mode == "adaptive_late":
-        return CSRNetRGBT_AdaptiveLate(load_imagenet = load_imagenet)
-    raise ValueError(f"Unknown mode: {mode}")
+def _resize_density_sum_preserving(d: torch.Tensor, size_hw: Tuple[int, int]) -> torch.Tensor:
+    """
+    Resizes the density map (B,1,H,W) to (B,1,h,w) while preserving total sum (count).
+    Uses 'area' (avg) interpolation then scales by area ratio.
+    """
+    if d.dim() != 4:
+        raise ValueError(f"density must be 4D (B,1,H,W), got {tuple(d.shape)}")
+    H, W = d.shape[-2:]
+    h, w = size_hw
+    if (H, W) == (h, w):
+        return d
+    d_rs = F.interpolate(d, size = (h, w), mode = "area")
+    scale = (H * W) / float(h * w)
+    return d_rs * scale
 
 
 @torch.no_grad()
-def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, mode: str, game_levels = (0, 1, 2, 3)):
+def evaluate(model: nn.Module, val_dl: DataLoader, device: torch.device, mode: str) -> Tuple[float, float, Dict[int, float]]:
+    """
+    Returns: MAE (GAME0), RMSE, GAME{1..3} dict
+    """
     model.eval()
-    rmse_acc = 0.0
-    mae_acc = 0.0
-    game_acc = {L: 0.0 for L in game_levels}
 
-    n = 0
-    for batch in loader:
+    abs_errs = []
+    sq_errs = []
+
+    # GAME metrics
+    game_abs = {1: [], 2: [], 3: []}
+
+    for batch in val_dl:
         if mode == "rgb":
-            x, den, _name, _gtc = batch
-            x = x.to(device, non_blocking = True)
+            x_rgb, den, meta, _ = batch
+            x_rgb = x_rgb.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
-            pred = model(x)
+            pred = model(x_rgb)
+
         elif mode == "t":
-            x, den, _name, _gtc = batch
-            x = x.to(device, non_blocking = True)
+            x_t, den, meta, _ = batch
+            x_t = x_t.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
-            pred = model(x)
+            if x_t.shape[1] == 1:
+                x_t = x_t.repeat(1, 3, 1, 1)
+            pred = model(x_t)
+
         elif mode == "early":
-            x4, den, _name, _gtc = batch
+            x4, den, meta, _ = batch
             x4 = x4.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
             pred = model(x4)
+
         else:
-            x_rgb, x_t3, den, _name, _gtc = batch
+            x_rgb, x_t3, den, meta, _ = batch
             x_rgb = x_rgb.to(device, non_blocking = True)
             x_t3 = x_t3.to(device, non_blocking = True)
             den = den.to(device, non_blocking = True)
+            if x_t3.shape[1] == 1:
+                x_t3 = x_t3.repeat(1, 3, 1, 1)
             pred = model(x_rgb, x_t3)
 
-        pred = F.relu(pred)
-
         if pred.shape[-2:] != den.shape[-2:]:
-            den = resize_density_sum_preserving(den, pred.shape[-2:])
-
-        c_pred = float(pred.sum().item())
-        c_gt = float(den.sum().item())
-        err = (c_pred - c_gt)
-
-        mae_acc += abs(err)
-        rmse_acc += (err ** 2)
-
-        for L in game_levels:
-            game_acc[L] += game_error(pred, den, level = L)
-
-        n += 1
-
-    n = max(1, n)
-    out = {"MAE": mae_acc / n, "RMSE": math.sqrt(rmse_acc / n)}
-    for L in game_levels:
-        out[f"GAME{L}"] = game_acc[L] / n
-    return out
-
-
-def make_optimizer(args, model: nn.Module):
-    if args.optimizer == "adam":
-        return torch.optim.Adam(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
-    if args.optimizer == "adamw":
-        return torch.optim.AdamW(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
-    raise ValueError(f"Unknown optimizer: {args.optimizer}")
-
-
-def make_scheduler(args, optimizer):
-    if args.scheduler == "none":
-        return None
-    if args.scheduler == "multistep":
-        milestones = [int(x) for x in args.milestones.split(",") if len(x.strip()) > 0]
-        return torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones = milestones, gamma = args.gamma)
-    raise ValueError(f"Unknown scheduler: {args.scheduler}")
-
-
-def illumination_gate_loss(aux: Dict[str, torch.Tensor], tau: float) -> torch.Tensor:
-    gate = aux["gate"].float()
-    lum = aux["lum"].float()
-    tau = float(tau)
-
-    denom = max(1e-6, (1.0 - tau))
-    target = ((lum - tau) / denom).clamp(0.0, 1.0)
-    return F.mse_loss(gate, target)
-
-
-@torch.no_grad()
-def ema_update(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
-    msd = model.state_dict()
-    esd = ema_model.state_dict()
-    for k, v_ema in esd.items():
-        v = msd[k]
-        if torch.is_floating_point(v_ema):
-            v_ema.mul_(decay).add_(v, alpha = 1.0 - decay)
-        else:
-            v_ema.copy_(v)
-
-
-def _count_loss(pred_pos: torch.Tensor, den: torch.Tensor, rel: bool, beta: float) -> torch.Tensor:
-    pred_f = pred_pos.float()
-    den_f = den.float()
-
-    c_pred = pred_f.sum(dim = (1, 2, 3))
-    c_gt = den_f.sum(dim = (1, 2, 3))
-
-    if rel:
-        denom = (c_gt.detach() + 1.0)
-        c_pred = c_pred / denom
-        c_gt = c_gt / denom
-
-    return F.smooth_l1_loss(c_pred, c_gt, beta = float(beta))
-
-
-def train_one_epoch(
-    model: nn.Module,
-    loader: DataLoader,
-    device: torch.device,
-    optimizer,
-    scaler,
-    args,
-    epoch: int,
-    ema_model: Optional[nn.Module] = None,
-) -> Dict[str, float]:
-    model.train()
-    mse = nn.MSELoss(reduction = "mean")
-
-    loss_acc = 0.0
-    base_acc = 0.0
-    temp_acc = 0.0
-    illum_acc = 0.0
-    count_acc = 0.0
-    game_acc = 0.0
-
-    step = 0
-    optimizer.zero_grad(set_to_none = True)
-
-    warm = max(0, int(args.aux_warmup_epochs))
-    aux_ramp = 1.0 if warm == 0 else min(1.0, float(epoch) / float(warm))
-
-    def forward_single(sample):
-        if args.mode in ["rgb", "t"]:
-            x, den, _name, _gtc = sample
-            x = x.to(device, non_blocking = True)
-            den = den.to(device, non_blocking = True)
-            with autocast_ctx(device, enabled = bool(args.amp)):
-                pred = model(x)  # IMPORTANT: no ReLU here
-            return pred, den, None
-
-        if args.mode == "early":
-            x4, den, _name, _gtc = sample
-            x4 = x4.to(device, non_blocking = True)
-            den = den.to(device, non_blocking = True)
-            with autocast_ctx(device, enabled = bool(args.amp)):
-                pred = model(x4)  # IMPORTANT: no ReLU here
-            return pred, den, None
-
-        x_rgb, x_t3, den, _name, _gtc = sample
-        x_rgb = x_rgb.to(device, non_blocking = True)
-        x_t3 = x_t3.to(device, non_blocking = True)
-        den = den.to(device, non_blocking = True)
-
-        if args.mode == "adaptive_late":
-            with autocast_ctx(device, enabled = bool(args.amp)):
-                pred, aux = model.forward_with_aux(x_rgb, x_t3)  # IMPORTANT: no ReLU here
-            return pred, den, aux
-
-        with autocast_ctx(device, enabled = bool(args.amp)):
-            pred = model(x_rgb, x_t3)  # IMPORTANT: no ReLU here
-        return pred, den, None
-
-    for batch in loader:
-        step += 1
-
-        is_pair = isinstance(batch, (tuple, list)) and len(batch) == 2 and isinstance(batch[0], (tuple, list))
-        if is_pair:
-            if args.batch_size != 1:
-                raise ValueError("temporal_pair requires batch_size = 1.")
-
-            a, b = batch
-            pred_a, den_a, aux_a = forward_single(a)
-            pred_b, den_b, aux_b = forward_single(b)
-
-            if pred_a.shape[-2:] != den_a.shape[-2:]:
-                den_a = resize_density_sum_preserving(den_a, pred_a.shape[-2:])
-            if pred_b.shape[-2:] != den_b.shape[-2:]:
-                den_b = resize_density_sum_preserving(den_b, pred_b.shape[-2:])
-
-            pred_a_pos = F.relu(pred_a)
-            pred_b_pos = F.relu(pred_b)
-
-            with torch.autocast(device_type = "cuda", enabled = False):
-                base_a = mse(pred_a.float(), den_a.float())
-                base_b = mse(pred_b.float(), den_b.float())
-                base_loss = 0.5 * (base_a + base_b)
-
-                count_loss = torch.zeros((), device = device, dtype = torch.float32)
-                if args.lambda_count > 0.0:
-                    cl_a = _count_loss(pred_a_pos, den_a, rel = bool(args.count_loss_rel), beta = args.count_loss_beta)
-                    cl_b = _count_loss(pred_b_pos, den_b, rel = bool(args.count_loss_rel), beta = args.count_loss_beta)
-                    count_loss = 0.5 * (cl_a + cl_b)
-
-                game_loss = torch.zeros((), device = device, dtype = torch.float32)
-                if args.lambda_game > 0.0:
-                    gl_a = grid_count_loss(pred_a_pos.float(), den_a.float(), level = int(args.game_level))
-                    gl_b = grid_count_loss(pred_b_pos.float(), den_b.float(), level = int(args.game_level))
-                    game_loss = 0.5 * (gl_a + gl_b)
-
-                temp_loss = torch.zeros((), device = device, dtype = torch.float32)
-                if args.lambda_temp > 0.0:
-                    cpa = pred_a_pos.float().sum(dim = (1, 2, 3))
-                    cpb = pred_b_pos.float().sum(dim = (1, 2, 3))
-                    cga = den_a.float().sum(dim = (1, 2, 3))
-                    cgb = den_b.float().sum(dim = (1, 2, 3))
-                    delta_pred = (cpb - cpa)
-                    delta_gt = (cgb - cga)
-
-                    if args.normalize_temp_loss:
-                        denom = (delta_gt.detach().abs() + 1.0)
-                        delta_pred = delta_pred / denom
-                        delta_gt = delta_gt / denom
-
-                    temp_loss = F.l1_loss(delta_pred, delta_gt)
-
-                illum_loss = torch.zeros((), device = device, dtype = torch.float32)
-                if args.lambda_illum > 0.0 and args.mode == "adaptive_late" and aux_a is not None:
-                    il_a = illumination_gate_loss(aux_a, tau = args.illum_tau)
-                    il_b = il_a
-                    if aux_b is not None:
-                        il_b = illumination_gate_loss(aux_b, tau = args.illum_tau)
-                    illum_loss = 0.5 * (il_a + il_b)
-
-                loss_total = (
-                    base_loss
-                    + (args.lambda_count * count_loss)
-                    + (args.lambda_game * game_loss)
-                    + aux_ramp * ((args.lambda_temp * temp_loss) + (args.lambda_illum * illum_loss))
-                )
-
-        else:
-            pred, den, aux = forward_single(batch)
-
-            if pred.shape[-2:] != den.shape[-2:]:
-                den = resize_density_sum_preserving(den, pred.shape[-2:])
-
-            pred_pos = F.relu(pred)
-
-            with torch.autocast(device_type = "cuda", enabled = False):
-                base_loss = mse(pred.float(), den.float())
-
-                count_loss = torch.zeros((), device = device, dtype = torch.float32)
-                if args.lambda_count > 0.0:
-                    count_loss = _count_loss(pred_pos, den, rel = bool(args.count_loss_rel), beta = args.count_loss_beta)
-
-                game_loss = torch.zeros((), device = device, dtype = torch.float32)
-                if args.lambda_game > 0.0:
-                    game_loss = grid_count_loss(pred_pos.float(), den.float(), level = int(args.game_level))
-
-                temp_loss = torch.zeros((), device = device, dtype = torch.float32)
-
-                illum_loss = torch.zeros((), device = device, dtype = torch.float32)
-                if args.lambda_illum > 0.0 and args.mode == "adaptive_late" and aux is not None:
-                    illum_loss = illumination_gate_loss(aux, tau = args.illum_tau)
-
-                loss_total = (
-                    base_loss
-                    + (args.lambda_count * count_loss)
-                    + (args.lambda_game * game_loss)
-                    + aux_ramp * (args.lambda_illum * illum_loss)
-                )
-
-        loss = loss_total / float(args.grad_accum)
-
-        if args.amp:
-            scaler.scale(loss).backward()
-        else:
-            loss.backward()
-
-        did_step = False
-        if step % args.grad_accum == 0:
-            if args.clip_grad > 0.0:
-                if args.amp:
-                    scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm = args.clip_grad)
-
-            if args.amp:
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                optimizer.step()
-
-            optimizer.zero_grad(set_to_none = True)
-            did_step = True
-
-        if did_step and ema_model is not None:
-            ema_update(ema_model, model, decay = float(args.ema_decay))
-
-        loss_acc += float(loss_total.item())
-        base_acc += float(base_loss.item())
-        temp_acc += float(temp_loss.item())
-        illum_acc += float(illum_loss.item())
-        count_acc += float(count_loss.item())
-        game_acc += float(game_loss.item())
-
-    if (step % args.grad_accum) != 0:
-        if args.clip_grad > 0.0:
-            if args.amp:
-                scaler.unscale_(optimizer)
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm = args.clip_grad)
-
-        if args.amp:
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            optimizer.step()
-
-        optimizer.zero_grad(set_to_none = True)
-
-        if ema_model is not None:
-            ema_update(ema_model, model, decay = float(args.ema_decay))
-
-    n = max(1, len(loader))
-    return {
-        "loss": loss_acc / n,
-        "base": base_acc / n,
-        "temp": temp_acc / n,
-        "illum": illum_acc / n,
-        "count": count_acc / n,
-        "game": game_acc / n,
-    }
-
-
-def save_ckpt(
-    path: str,
-    model: nn.Module,
-    optimizer,
-    scheduler,
-    epoch: int,
-    best_rmse: float,
-    ema_model: Optional[nn.Module] = None,
-):
-    obj = {
-        "epoch": int(epoch),
-        "best_rmse": float(best_rmse),
-        "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "scheduler": None if scheduler is None else scheduler.state_dict(),
-    }
-    if ema_model is not None:
-        obj["ema_model"] = ema_model.state_dict()
-    torch.save(obj, path)
-
-
-def load_resume(path: str, model: nn.Module, optimizer, scheduler, ema_model: Optional[nn.Module]):
-    ck = torch.load(path, map_location = "cpu")
-    model.load_state_dict(ck["model"], strict = True)
-    if "optimizer" in ck and optimizer is not None:
-        optimizer.load_state_dict(ck["optimizer"])
-    if scheduler is not None and ck.get("scheduler", None) is not None:
-        scheduler.load_state_dict(ck["scheduler"])
-    if ema_model is not None and ("ema_model" in ck):
-        ema_model.load_state_dict(ck["ema_model"], strict = True)
-    start_epoch = int(ck.get("epoch", 0))
-    best_rmse = float(ck.get("best_rmse", float("inf")))
-    return start_epoch, best_rmse
+            den = _resize_density_sum_preserving(den, pred.shape[-2:])
+
+        pred_cnt = float(pred.sum().item())
+        gt_cnt = float(den.sum().item())
+
+        err = pred_cnt - gt_cnt
+        abs_errs.append(abs(err))
+        sq_errs.append(err * err)
+
+        # GAME (grid-based MAE)
+        for L in [1, 2, 3]:
+            g = 2**L
+            # split into g x g
+            ph, pw = pred.shape[-2], pred.shape[-1]
+            cell_h = ph // g
+            cell_w = pw // g
+            # crop to multiple
+            ph2 = cell_h * g
+            pw2 = cell_w * g
+            p = pred[..., :ph2, :pw2]
+            d = den[..., :ph2, :pw2]
+            p_cells = p.reshape(1, 1, g, cell_h, g, cell_w).sum(dim = (3, 5))
+            d_cells = d.reshape(1, 1, g, cell_h, g, cell_w).sum(dim = (3, 5))
+            game_abs[L].append(float(torch.abs(p_cells - d_cells).sum().item()))
+
+    mae = float(np.mean(abs_errs)) if abs_errs else float("nan")
+    rmse = float(np.sqrt(np.mean(sq_errs))) if sq_errs else float("nan")
+    game = {L: float(np.mean(game_abs[L])) if game_abs[L] else float("nan") for L in [1, 2, 3]}
+    return mae, rmse, game
+
+
+def _set_requires_grad(module: nn.Module, flag: bool) -> None:
+    for p in module.parameters():
+        p.requires_grad = flag
+
+
+# =========================
+# Main
+# =========================
+
+def parse_args():
+    p = argparse.ArgumentParser("RGB-T Crowd Counting Training")
+
+    # Data
+    p.add_argument("--data_root", type = str, required = True)
+    p.add_argument("--split_root", type = str, default = "")
+    p.add_argument("--crop_size", type = int, default = 224)
+    p.add_argument("--sigma", type = float, default = 15.0)
+    p.add_argument("--down", type = int, default = 8)
+
+    # Train
+    p.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "early", "late", "adaptive_late"])
+    p.add_argument("--epochs", type = int, default = 100)
+    p.add_argument("--batch_size", type = int, default = 1)
+    p.add_argument("--lr", type = float, default = 1e-5)
+    p.add_argument("--weight_decay", type = float, default = 1e-4)
+    p.add_argument("--optimizer", type = str, default = "adam", choices = ["adam", "adamw"])
+    p.add_argument("--amp", action = "store_true")
+    p.add_argument("--grad_accum", type = int, default = 1)
+    p.add_argument("--clip_grad", type = float, default = 0.0)
+
+    # Adaptive-late extras
+    p.add_argument("--gate_lr", type = float, default = 1e-4)
+    p.add_argument("--freeze_backbones_epochs", type = int, default = 0)
+
+    # Scheduler (optional)
+    p.add_argument("--scheduler", type = str, default = "none", choices = ["none", "multistep", "onecycle"])
+    p.add_argument("--milestones", type = str, default = "200,300")
+    p.add_argument("--gamma", type = float, default = 0.1)
+    p.add_argument("--max_lr", type = float, default = 2e-5)
+    p.add_argument("--max_gate_lr", type = float, default = 2e-4)
+    p.add_argument("--pct_start", type = float, default = 0.1)
+    p.add_argument("--div_factor", type = float, default = 25.0)
+    p.add_argument("--final_div_factor", type = float, default = 10000.0)
+
+    # System
+    p.add_argument("--seed", type = int, default = 42)
+    p.add_argument("--workers", type = int, default = 4)
+    p.add_argument("--save_dir", type = str, default = "./ckpt")
+
+    return p.parse_args()
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices = ["rgb", "t", "early", "late", "adaptive_late"], required = True)
-
-    ap.add_argument("--data_root", required = True)
-    ap.add_argument("--split_train", default = "train")
-    ap.add_argument("--split_val", default = "val")
-
-    ap.add_argument("--img_h", type = int, default = 768)
-    ap.add_argument("--img_w", type = int, default = 1024)
-    ap.add_argument("--sigma", type = float, default = 15.0)
-    ap.add_argument("--out_stride", type = int, default = 8)
-
-    ap.add_argument("--epochs", type = int, default = 400)
-    ap.add_argument("--batch_size", type = int, default = 1)
-    ap.add_argument("--grad_accum", type = int, default = 1)
-
-    # SOTA-aligned defaults
-    ap.add_argument("--lr", type = float, default = 1e-5)
-    ap.add_argument("--weight_decay", type = float, default = 1e-4)
-    ap.add_argument("--optimizer", choices = ["adam", "adamw"], default = "adam")
-
-    # Scheduler is not mandated by the paper, so default to none for cleaner comparability
-    ap.add_argument("--scheduler", choices = ["none", "multistep"], default = "none")
-    ap.add_argument("--milestones", type = str, default = "200,300")
-    ap.add_argument("--gamma", type = float, default = 0.1)
-
-    # SOTA-aligned augmentation defaults
-    ap.add_argument("--crop_size", type = int, default = 224)
-    ap.add_argument("--flip_prob", type = float, default = 0.5)
-
-    ap.add_argument("--amp", action = "store_true")
-    ap.add_argument("--clip_grad", type = float, default = 0.0)
-
-    ap.add_argument("--num_workers", type = int, default = -1)
-    ap.add_argument("--seed", type = int, default = 42)
-
-    ap.add_argument("--save_dir", required = True)
-    ap.add_argument("--resume", type = str, default = "")
-
-    # Novelty controls (keep off for baselines unless doing ablations)
-    ap.add_argument("--temporal_pair", action = "store_true")
-    ap.add_argument("--pair_delta", type = int, default = 1)
-    ap.add_argument("--lambda_temp", type = float, default = 0.0)
-    ap.add_argument("--normalize_temp_loss", action = "store_true")
-    ap.add_argument("--aux_warmup_epochs", type = int, default = 10)
-
-    ap.add_argument("--lambda_illum", type = float, default = 0.0)
-    ap.add_argument("--illum_tau", type = float, default = 0.35)
-
-    ap.add_argument("--lambda_count", type = float, default = 0.0)
-    ap.add_argument("--count_loss_rel", action = "store_true")
-    ap.add_argument("--count_loss_beta", type = float, default = 1.0)
-
-    ap.add_argument("--lambda_game", type = float, default = 0.0)
-    ap.add_argument("--game_level", type = int, default = 1)
-
-    ap.add_argument("--ema_decay", type = float, default = 0.0)  # 0 disables
-    ap.add_argument("--ema_eval", action = "store_true")
-
-    args = ap.parse_args()
-
-    assert args.img_h % args.out_stride == 0, "img_h must be divisible by out_stride"
-    assert args.img_w % args.out_stride == 0, "img_w must be divisible by out_stride"
+    args = parse_args()
 
     os.makedirs(args.save_dir, exist_ok = True)
-    set_seed(args.seed, deterministic = True)
 
-    device = get_device()
+    set_seed(args.seed)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[init] device = {device}")
-    print(f"[init] PROJECT_ROOT = {PROJECT_ROOT}")
 
-    img_size = (args.img_h, args.img_w)
+    #Build split lists
+    base_train, base_val = build_splits_rgbt_cc(args.data_root, args.split_root)
 
-    if args.mode == "rgb":
-        base_train = RGBTCC_RGBDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
-        base_val = RGBTCC_RGBDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False, out_stride = args.out_stride)
-    elif args.mode == "t":
-        base_train = RGBTCC_TDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
-        base_val = RGBTCC_TDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False, out_stride = args.out_stride)
-    elif args.mode == "early":
-        base_train = RGBTCC_EarlyFusionDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
-        base_val = RGBTCC_EarlyFusionDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False, out_stride = args.out_stride)
-    else:
-        base_train = RGBTCC_PairedDataset(args.data_root, args.split_train, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
-        base_val = RGBTCC_PairedDataset(args.data_root, args.split_val, img_size, args.sigma, return_pts = False, out_stride = args.out_stride)
-
-    if args.temporal_pair:
-        if args.mode != "adaptive_late":
-            print("[warn] temporal_pair is mainly intended for adaptive_late. Using it for baselines is an ablation.")
-        base_train = TemporalPairDataset(base_train, pair_delta = args.pair_delta)
-
-    train_ds = TrainAugment(
-        base_train,
-        mode = args.mode,
-        sigma = args.sigma,
+    #paired multimodal augmentation is inside RGBTCCDset for training
+    #deterministic (no random crop/flip) for val.
+    train_ds = RGBTCCDset(
+        base = base_train,
         crop_size = args.crop_size,
-        flip_prob = args.flip_prob,
-        stride = args.out_stride,
+        sigma = args.sigma,
+        down = args.down,
+        is_train = True,
+    )
+    val_ds = RGBTCCDset(
+        base = base_val,
+        crop_size = args.crop_size,
+        sigma = args.sigma,
+        down = args.down,
+        is_train = False,   #deterministic center crop
     )
 
-    if args.num_workers < 0:
-        args.num_workers = min(8, os.cpu_count() or 4)
+    pin = (device.type == "cuda")
+    workers = args.workers if device.type == "cuda" else 0
 
+    #Make dataloader deterministic across epochs via generator
     g = torch.Generator()
     g.manual_seed(args.seed)
 
-    train_loader = DataLoader(
+    train_dl = DataLoader(
         train_ds,
         batch_size = args.batch_size,
         shuffle = True,
-        num_workers = args.num_workers,
-        pin_memory = True,
-        drop_last = False,
+        num_workers = workers,
+        pin_memory = pin,
+        drop_last = True,
         worker_init_fn = seed_worker,
         generator = g,
     )
-
-    val_loader = DataLoader(
-        base_val,
+    val_dl = DataLoader(
+        val_ds,
         batch_size = 1,
         shuffle = False,
-        num_workers = max(1, args.num_workers // 2),
-        pin_memory = True,
+        num_workers = workers if device.type == "cuda" else 0,
+        pin_memory = (device.type == "cuda"),
         drop_last = False,
     )
 
-    model = build_model(args.mode, load_imagenet = True).to(device)
+    print(f"[init] train = {len(base_train)}  val = {len(base_val)}  workers = {workers}")
 
-    ema_model = None
-    if args.ema_decay and args.ema_decay > 0.0:
-        ema_model = copy.deepcopy(model).eval()
-        for p in ema_model.parameters():
-            p.requires_grad = False
-
-    optimizer = make_optimizer(args, model)
-    scheduler = make_scheduler(args, optimizer)
-
-    if device.type == "cuda":
-        try:
-            scaler = torch.amp.GradScaler("cuda", enabled = bool(args.amp))
-        except Exception:
-            scaler = torch.cuda.amp.GradScaler(enabled = bool(args.amp))
+    if args.mode in ["rgb", "t"]:
+        model = CSRNet(load_imagenet = True).to(device)
+    elif args.mode == "early":
+        model = CSRNetRGBT_Early(load_imagenet = True).to(device)
+    elif args.mode == "late":
+        model = CSRNetRGBT_Late(load_imagenet = True).to(device)
     else:
-        scaler = torch.cuda.amp.GradScaler(enabled = False)
+        model = CSRNetRGBT_AdaptiveLate(load_imagenet = True).to(device)
 
-    start_epoch = 0
-    best_rmse = float("inf")
-    if args.resume and os.path.isfile(args.resume):
-        start_epoch, best_rmse = load_resume(args.resume, model, optimizer, scheduler, ema_model)
-        print(f"[resume] from {args.resume} | start_epoch = {start_epoch} | best_rmse = {best_rmse}")
+    if args.mode == "adaptive_late":
+        backbone_params = list(model.rgb_net.parameters()) + list(model.t_net.parameters())
+        gate_params = list(model.gate.parameters())
 
-    for epoch in range(start_epoch + 1, args.epochs + 1):
+        if args.optimizer == "adam":
+            optim = torch.optim.Adam(
+                [
+                    {"params": backbone_params, "lr": args.lr, "weight_decay": args.weight_decay},
+                    {"params": gate_params, "lr": args.gate_lr, "weight_decay": args.weight_decay},
+                ]
+            )
+        else:
+            optim = torch.optim.AdamW(
+                [
+                    {"params": backbone_params, "lr": args.lr, "weight_decay": args.weight_decay},
+                    {"params": gate_params, "lr": args.gate_lr, "weight_decay": args.weight_decay},
+                ]
+            )
+    else:
+        if args.optimizer == "adam":
+            optim = torch.optim.Adam(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
+        else:
+            optim = torch.optim.AdamW(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
+
+    mse = nn.MSELoss()
+    scaler = torch.amp.GradScaler("cuda", enabled = (args.amp and device.type == "cuda"))
+
+    # Scheduler setup
+    scheduler = None
+    step_scheduler_per_optim_step = False
+
+    steps_per_epoch_optim = int(math.ceil(len(train_dl) / float(max(1, args.grad_accum))))
+
+    if args.scheduler == "multistep":
+        ms = [int(x.strip()) for x in args.milestones.split(",") if x.strip()]
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optim, milestones = ms, gamma = args.gamma)
+        step_scheduler_per_optim_step = False  # epoch-level
+
+    elif args.scheduler == "onecycle":
+        if args.mode == "adaptive_late":
+            max_lrs = [args.max_lr, args.max_gate_lr]
+        else:
+            max_lrs = args.max_lr
+
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optim,
+            max_lr = max_lrs,
+            epochs = args.epochs,
+            steps_per_epoch = steps_per_epoch_optim,
+            pct_start = args.pct_start,
+            div_factor = args.div_factor,
+            final_div_factor = args.final_div_factor,
+            anneal_strategy = "cos",
+        )
+        step_scheduler_per_optim_step = True  # batch-level (but only when optim.step happens)
+
+    best_mae = float("inf")
+
+    for ep in range(1, args.epochs + 1):
+        model.train()
+
+        if args.mode == "adaptive_late" and args.freeze_backbones_epochs > 0:
+            freeze = (ep <= args.freeze_backbones_epochs)
+            _set_requires_grad(model.rgb_net, not freeze)
+            _set_requires_grad(model.t_net, not freeze)
+            _set_requires_grad(model.gate, True)
+
+        run_loss = 0.0
         t0 = time.time()
 
-        train_stats = train_one_epoch(
-            model, train_loader, device, optimizer, scaler, args, epoch = epoch, ema_model = ema_model
-        )
+        optim.zero_grad(set_to_none = True)
 
-        if scheduler is not None:
+        for step, batch in enumerate(train_dl, 1):
+            with torch.amp.autocast(
+                device_type = _autocast_device_type(device),
+                enabled = (args.amp and device.type == "cuda"),
+            ):
+                if args.mode == "rgb":
+                    x_rgb, den, _, _ = batch
+                    x_rgb = x_rgb.to(device, non_blocking = True)
+                    den = den.to(device, non_blocking = True)
+                    pred = model(x_rgb)
+
+                elif args.mode == "t":
+                    x_t, den, _, _ = batch
+                    x_t = x_t.to(device, non_blocking = True)
+                    den = den.to(device, non_blocking = True)
+                    if x_t.shape[1] == 1:
+                        x_t = x_t.repeat(1, 3, 1, 1)
+                    pred = model(x_t)
+
+                elif args.mode == "early":
+                    x4, den, _, _ = batch
+                    x4 = x4.to(device, non_blocking = True)
+                    den = den.to(device, non_blocking = True)
+                    pred = model(x4)
+
+                else:
+                    x_rgb, x_t3, den, _, _ = batch
+                    x_rgb = x_rgb.to(device, non_blocking = True)
+                    x_t3 = x_t3.to(device, non_blocking = True)
+                    den = den.to(device, non_blocking = True)
+                    if x_t3.shape[1] == 1:
+                        x_t3 = x_t3.repeat(1, 3, 1, 1)
+                    pred = model(x_rgb, x_t3)
+
+                if pred.shape[-2:] != den.shape[-2:]:
+                    den = _resize_density_sum_preserving(den, pred.shape[-2:])
+
+                loss = mse(pred, den) / max(1, args.grad_accum)
+
+            scaler.scale(loss).backward()
+            run_loss += float(loss.item()) * max(1, args.grad_accum)
+
+            do_step = (step % max(1, args.grad_accum) == 0)
+            if do_step:
+                if args.clip_grad and args.clip_grad > 0:
+                    scaler.unscale_(optim)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = args.clip_grad)
+
+                scaler.step(optim)
+                scaler.update()
+                optim.zero_grad(set_to_none = True)
+
+                if scheduler is not None and step_scheduler_per_optim_step:
+                    scheduler.step()
+
+            if step == 1 or step % 50 == 0:
+                print(f"[e{ep:03d} s{step:04d}/{len(train_dl)}] loss = {run_loss / step:.6f}")
+
+        #Handle remainder accumulation (if len(train_dl) not divisible by grad_accum)
+        if len(train_dl) % max(1, args.grad_accum) != 0:
+            if args.clip_grad and args.clip_grad > 0:
+                scaler.unscale_(optim)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = args.clip_grad)
+
+            scaler.step(optim)
+            scaler.update()
+            optim.zero_grad(set_to_none = True)
+
+            if scheduler is not None and step_scheduler_per_optim_step:
+                scheduler.step()
+
+        train_loss = run_loss / max(1, len(train_dl))
+        val_mae, val_rmse, val_game = evaluate(model, val_dl, device, args.mode)
+
+        #Epoch-level scheduler step (MultiStepLR)
+        if scheduler is not None and (not step_scheduler_per_optim_step):
             scheduler.step()
 
-        eval_model = ema_model if (ema_model is not None and args.ema_eval) else model
-        val_stats = evaluate(eval_model, val_loader, device, mode = args.mode)
-
-        dt = time.time() - t0
-        lr_now = optimizer.param_groups[0]["lr"]
-
-        print(
-            f"[epoch {epoch:03d}/{args.epochs}] "
-            f"lr = {lr_now:.2e} | "
-            f"train loss = {train_stats['loss']:.4f} "
-            f"(base {train_stats['base']:.4f}, count {train_stats['count']:.4f}, game {train_stats['game']:.4f}, "
-            f"temp {train_stats['temp']:.4f}, illum {train_stats['illum']:.4f}) | "
-            f"val RMSE = {val_stats['RMSE']:.3f}, MAE = {val_stats['MAE']:.3f}, "
-            f"GAME0 = {val_stats['GAME0']:.3f}, GAME1 = {val_stats['GAME1']:.3f}, "
-            f"GAME2 = {val_stats['GAME2']:.3f}, GAME3 = {val_stats['GAME3']:.3f} | "
-            f"time = {dt:.1f}s"
+        torch.save(
+            {
+                "epoch": ep,
+                "model": model.state_dict(),
+                "val_mae": val_mae,
+                "val_rmse": val_rmse,
+                "val_game": val_game,
+                "lr": optim.param_groups[0]["lr"],
+            },
+            os.path.join(args.save_dir, f"{args.mode}_last.pth")
         )
 
-        save_ckpt(os.path.join(args.save_dir, "ckpt_last.pt"), model, optimizer, scheduler, epoch, best_rmse, ema_model = ema_model)
+        if val_mae < best_mae:
+            best_mae = val_mae
+            torch.save(
+                {
+                    "epoch": ep,
+                    "model": model.state_dict(),
+                    "val_mae": val_mae,
+                    "val_rmse": val_rmse,
+                    "val_game": val_game,
+                    "lr": optim.param_groups[0]["lr"],
+                },
+                os.path.join(args.save_dir, f"{args.mode}_best.pth")
+            )
+            print(f"-> saved {args.mode}_best.pth (MAE/GAME0 {val_mae:.2f})")
 
-        if val_stats["RMSE"] < best_rmse:
-            best_rmse = float(val_stats["RMSE"])
-            save_ckpt(os.path.join(args.save_dir, "ckpt_best.pt"), model, optimizer, scheduler, epoch, best_rmse, ema_model = ema_model)
+        dt = time.time() - t0
+        g1 = val_game.get(1, float("nan"))
+        g2 = val_game.get(2, float("nan"))
+        g3 = val_game.get(3, float("nan"))
+        lr0 = optim.param_groups[0]["lr"]
 
-    print(f"[done] best RMSE = {best_rmse:.3f}")
+        print(
+            f"Epoch {ep:03d}: train_loss = {train_loss:.6f}  "
+            f"MAE/GAME0 = {val_mae:.2f}  RMSE = {val_rmse:.2f}  "
+            f"GAME1 = {g1:.2f}  GAME2 = {g2:.2f}  GAME3 = {g3:.2f}  "
+            f"lr = {lr0:.2e}  time = {dt:.1f}s"
+        )
 
 
 if __name__ == "__main__":
