@@ -20,8 +20,8 @@ module purge
 module load pytorch/2.6.0-py3-cu11.8
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
-# Set this to 10 for a quick sanity run, then switch to 100/400 when stable.
-EPOCHS=10
+
+EPOCHS=100
 
 python -u scripts/train_rgbt.py \
   --mode rgb \
