@@ -1,519 +1,734 @@
-import json
 import os
-import random
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
-
-import cv2
+import json
 import numpy as np
+import cv2
 import torch
 from torch.utils.data import Dataset
-
-try:
-    import scipy.io as sio
-except Exception:
-    sio = None
+from torchvision import transforms
+from scipy.ndimage import gaussian_filter
+from scipy.io import loadmat
 
 
-# -----------------------------
-# Determinism helpers
-# -----------------------------
-def seed_worker(worker_id: int) -> None:
+_IMAGENET_MEAN = [0.485, 0.456, 0.406]
+_IMAGENET_STD = [0.229, 0.224, 0.225]
+
+_tf_rgb = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean = _IMAGENET_MEAN, std = _IMAGENET_STD),
+])
+
+_tf_t3 = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean = _IMAGENET_MEAN, std = _IMAGENET_STD),
+])
+
+_tf_t1 = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean = [0.485], std = [0.229]),
+])
+
+
+def _pick_existing(path_no_ext, exts):
+    for e in exts:
+        p = path_no_ext + e
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _den_to_tensor(den_hw):
+    den_hw = np.ascontiguousarray(den_hw.astype(np.float32, copy = False))
+    return torch.tensor(den_hw, dtype = torch.float32).unsqueeze(0).contiguous()
+
+
+def density_from_points(points_xy, h, w, sigma = 15.0):
     """
-    DataLoader worker seeding. Use this with:
-      DataLoader(..., worker_init_fn = seed_worker, generator = g)
-
-    So random ops inside workers (if any) are deterministic.
+    points_xy: (N,2) in (x,y) coordinates in the SAME space as (h,w).
+    Returns a density map normalized so sum == N (when N > 0).
     """
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
+    dm = np.zeros((h, w), dtype = np.float32)
+    if points_xy.size == 0:
+        return dm
+
+    xs = np.clip(points_xy[:, 0].astype(int), 0, w - 1)
+    ys = np.clip(points_xy[:, 1].astype(int), 0, h - 1)
+
+    dm[ys, xs] = 1.0
+    dm = gaussian_filter(dm, sigma = sigma, mode = "constant")
+
+    s = float(dm.sum())
+    if s > 0:
+        dm *= (len(xs) / s)
+    return dm
 
 
-# -----------------------------
-# Point / density utilities (CSRNet-style)
-# -----------------------------
-def _as_float32(x: np.ndarray) -> np.ndarray:
-    return x.astype(np.float32, copy = False)
+def _load_points_json(p):
+    with open(p, "r") as f:
+        data = json.load(f)
+
+    for k in ["points", "keypoints", "annotations", "labels"]:
+        if k in data and isinstance(data[k], list):
+            pts = np.array(data[k], dtype = np.float32).reshape(-1, 2)
+            return pts
+
+    return np.zeros((0, 2), dtype = np.float32)
 
 
-def _safe_imread_rgb(path: str) -> np.ndarray:
-    img = cv2.imread(path, cv2.IMREAD_COLOR)
-    if img is None:
-        raise FileNotFoundError(f"Failed to read image: {path}")
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    return img
+def _load_points_mat(p):
+    m = loadmat(p)
+
+    if "point" in m:
+        return np.array(m["point"], dtype = np.float32).reshape(-1, 2)
+
+    if "image_info" in m:
+        pts = m["image_info"][0, 0][0, 0][0]
+        return np.array(pts, dtype = np.float32).reshape(-1, 2)
+
+    return np.zeros((0, 2), dtype = np.float32)
 
 
-def _safe_imread_gray(path: str) -> np.ndarray:
-    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-    if img is None:
-        raise FileNotFoundError(f"Failed to read image: {path}")
+def load_points(label_path_no_ext):
+    json_p = label_path_no_ext + ".json"
+    mat_p = label_path_no_ext + ".mat"
 
-    # If 3-channel thermal accidentally stored, convert to gray
-    if img.ndim == 3:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    if os.path.exists(json_p):
+        return _load_points_json(json_p)
+    if os.path.exists(mat_p):
+        return _load_points_mat(mat_p)
 
-    return img
-
-
-def _normalize_uint_like_to_01(x: np.ndarray) -> np.ndarray:
-    """
-    Normalize an integer-like image to [0, 1] robustly.
-    Handles 8-bit, 16-bit, or arbitrary ranges.
-    """
-    x = x.astype(np.float32, copy = False)
-    x_min = float(np.min(x))
-    x_max = float(np.max(x))
-    if x_max <= x_min + 1e-6:
-        return np.zeros_like(x, dtype = np.float32)
-    return (x - x_min) / (x_max - x_min)
+    return np.zeros((0, 2), dtype = np.float32)
 
 
-def _normalize_imagenet(chw: torch.Tensor) -> torch.Tensor:
-    """
-    ImageNet normalization for 3-channel inputs. Assumes input in [0, 1].
-    """
-    mean = torch.tensor([0.485, 0.456, 0.406], dtype = chw.dtype, device = chw.device)[:, None, None]
-    std = torch.tensor([0.229, 0.224, 0.225], dtype = chw.dtype, device = chw.device)[:, None, None]
-    return (chw - mean) / std
-
-
-def _normalize_4ch(chw: torch.Tensor) -> torch.Tensor:
-    """
-    Normalize 4-channel early-fusion input: RGB (ImageNet) + Thermal (0.5/0.5 default).
-    Assumes input in [0, 1].
-    """
-    mean = torch.tensor([0.485, 0.456, 0.406, 0.5], dtype = chw.dtype, device = chw.device)[:, None, None]
-    std = torch.tensor([0.229, 0.224, 0.225, 0.5], dtype = chw.dtype, device = chw.device)[:, None, None]
-    return (chw - mean) / std
-
-
-def _mat_to_points(mat_obj: Dict) -> np.ndarray:
-    """
-    Try multiple common keys to extract Nx2 points from a .mat.
-    """
-    # Common keys seen across crowd datasets
-    candidate_keys = [
-        "annPoints",
-        "image_info",
-        "gt",
-        "points",
-        "p",
-        "loc",
-        "location",
-    ]
-
-    for k in candidate_keys:
-        if k not in mat_obj:
-            continue
-
-        v = mat_obj[k]
-
-        # ShanghaiTech-style image_info
-        if k == "image_info":
-            try:
-                v = v[0, 0][0, 0][0]
-            except Exception:
-                pass
-
-        pts = np.array(v)
-
-        # Some mats store as 2xN
-        if pts.ndim == 2 and pts.shape[0] == 2 and pts.shape[1] != 2:
-            pts = pts.T
-
-        if pts.ndim == 2 and pts.shape[1] == 2:
-            return _as_float32(pts)
-
-    raise KeyError(f"Could not find points in .mat keys: {list(mat_obj.keys())}")
-
-
-def load_points(gt_path: str) -> np.ndarray:
-    """
-    Load Nx2 points from:
-      - .mat (common crowd dataset formats)
-      - .json (expects list of [x,y] or dicts with x/y)
-    """
-    ext = os.path.splitext(gt_path)[1].lower()
-
-    if ext == ".json":
-        with open(gt_path, "r") as f:
-            data = json.load(f)
-        pts: List[List[float]] = []
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and ("x" in item) and ("y" in item):
-                    pts.append([float(item["x"]), float(item["y"])])
-                elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                    pts.append([float(item[0]), float(item[1])])
-        return np.asarray(pts, dtype = np.float32)
-
-    if ext == ".mat":
-        if sio is None:
-            raise ImportError("scipy is required to load .mat ground-truth files.")
-        mat = sio.loadmat(gt_path)
-        return _mat_to_points(mat)
-
-    raise ValueError(f"Unsupported GT extension: {ext} ({gt_path})")
-
-
-def density_from_points(
-    pts_xy: np.ndarray,
-    out_h: int,
-    out_w: int,
-    sigma: float = 4.0,
-) -> np.ndarray:
-    """
-    CSRNet-style: place Gaussian at each head point on an output grid.
-
-    Important property for meaningful training loss:
-      sum(density) ~= number of points  (after normalization below).
-
-    We normalize the density map to exactly preserve count (unless empty).
-    """
-    density = np.zeros((out_h, out_w), dtype = np.float32)
-    if pts_xy is None or len(pts_xy) == 0:
-        return density
-
-    pts = np.asarray(pts_xy, dtype = np.float32)
-    if pts.ndim != 2 or pts.shape[1] != 2:
-        raise ValueError(f"pts_xy must be Nx2, got shape {pts.shape}")
-
-    # Precompute gaussian kernel size (odd)
-    ksize = int(6.0 * sigma + 1.0)
-    if ksize % 2 == 0:
-        ksize += 1
-    radius = ksize // 2
-
-    # Build a gaussian kernel once
-    ax = np.arange(-radius, radius + 1, dtype = np.float32)
-    xx, yy = np.meshgrid(ax, ax)
-    kernel = np.exp(-(xx**2 + yy**2) / (2.0 * sigma * sigma)).astype(np.float32)
-
-    # Add kernels
-    for (x, y) in pts:
-        x_i = int(round(x))
-        y_i = int(round(y))
-        if x_i < 0 or x_i >= out_w or y_i < 0 or y_i >= out_h:
-            continue
-
-        x1 = max(0, x_i - radius)
-        y1 = max(0, y_i - radius)
-        x2 = min(out_w, x_i + radius + 1)
-        y2 = min(out_h, y_i + radius + 1)
-
-        kx1 = x1 - (x_i - radius)
-        ky1 = y1 - (y_i - radius)
-        kx2 = kx1 + (x2 - x1)
-        ky2 = ky1 + (y2 - y1)
-
-        density[y1:y2, x1:x2] += kernel[ky1:ky2, kx1:kx2]
-
-    # Normalize to preserve count
-    s = float(density.sum())
-    if s > 1e-6:
-        density *= (len(pts) / s)
-
-    return density
-
-
-# -----------------------------
-# Dataset configs
-# -----------------------------
-@dataclass
-class RGBTCCConfig:
-    root_dir: str
-    split: str
-    img_size: Tuple[int, int] = (224, 224)  # (H, W)
-    out_stride: int = 8
-    gt_preference: Tuple[str, ...] = (".mat", ".json")  # try in this order
-
-
-def _list_sorted_images(folder: str) -> List[str]:
-    if not os.path.isdir(folder):
-        raise FileNotFoundError(f"Folder not found: {folder}")
-    files = []
-    for f in os.listdir(folder):
-        if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")):
-            files.append(os.path.join(folder, f))
-    files.sort()
-    return files
-
-
-def _find_gt_path(gt_dir: str, base_name: str, exts: Tuple[str, ...]) -> str:
-    for ext in exts:
-        cand = os.path.join(gt_dir, base_name + ext)
-        if os.path.isfile(cand):
-            return cand
-    raise FileNotFoundError(f"No GT found for {base_name} in {gt_dir} with exts {exts}")
-
-
-def _resize_and_scale_points(
-    img: np.ndarray,
-    pts: np.ndarray,
-    new_hw: Tuple[int, int],
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Resize image to new_hw = (H, W) and scale points accordingly.
-    Points expected in pixel coordinates (x,y) with origin at top-left.
-    """
-    h0, w0 = img.shape[:2]
-    new_h, new_w = new_hw
-
-    img_rs = cv2.resize(img, (new_w, new_h), interpolation = cv2.INTER_LINEAR)
-
-    if pts is None or len(pts) == 0:
-        return img_rs, np.zeros((0, 2), dtype = np.float32)
-
-    pts = np.asarray(pts, dtype = np.float32)
-    sx = float(new_w) / float(w0)
-    sy = float(new_h) / float(h0)
-    pts_rs = pts.copy()
-    pts_rs[:, 0] *= sx
-    pts_rs[:, 1] *= sy
-    return img_rs, pts_rs
-
-
-def _to_chw_tensor_rgb(img_rgb_uint: np.ndarray) -> torch.Tensor:
-    """
-    img_rgb_uint: HxWx3 uint-like or float, converted to float [0,1] then CHW tensor.
-    """
-    if img_rgb_uint.dtype != np.float32:
-        img = img_rgb_uint.astype(np.float32) / 255.0
+def _to_t3(img_any):
+    if img_any.ndim == 2:
+        g = img_any
     else:
-        img = img_rgb_uint
-        if img.max() > 1.5:
-            img = img / 255.0
-
-    chw = torch.from_numpy(img).permute(2, 0, 1).contiguous()
-    return chw
+        g = cv2.cvtColor(img_any, cv2.COLOR_BGR2GRAY)
+    t3 = np.stack([g, g, g], axis = 2)
+    return t3
 
 
-def _to_chw_tensor_gray01(img_gray: np.ndarray) -> torch.Tensor:
-    """
-    img_gray: HxW uint/float. Normalize to [0,1], output 1xHxW.
-    """
-    if img_gray.dtype == np.uint8:
-        x = img_gray.astype(np.float32) / 255.0
-    elif img_gray.dtype in (np.uint16, np.int16, np.int32, np.uint32, np.int64, np.uint64):
-        x = _normalize_uint_like_to_01(img_gray)
-    else:
-        x = img_gray.astype(np.float32, copy = False)
-        if x.max() > 1.5:
-            # assume 0..255-ish float
-            x = x / 255.0
+class RGBTCC_RGBDataset(Dataset):
+    def __init__(
+        self,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
+    ):
+        assert split in ["train", "val", "test"]
+        self.split_dir = os.path.join(root, split)
+        self.h, self.w = img_size
+        self.sigma = float(sigma)
+        self.return_pts = bool(return_pts)
+        self.out_stride = int(out_stride)
+
+        names = [f for f in os.listdir(self.split_dir) if f.endswith("_RGB.jpg") or f.endswith("_RGB.png")]
+        ids = sorted({n.replace("_RGB.jpg", "").replace("_RGB.png", "") for n in names})
+        if max_count is not None:
+            ids = ids[:max_count]
+        if len(ids) == 0:
+            raise RuntimeError(f"No *_RGB images in {self.split_dir}")
+        self.ids = ids
+
+        self.h_out = self.h // self.out_stride
+        self.w_out = self.w // self.out_stride
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, idx):
+        sid = self.ids[idx]
+
+        rgb_p = _pick_existing(os.path.join(self.split_dir, f"{sid}_RGB"), [".jpg", ".png"])
+        if rgb_p is None:
+            raise FileNotFoundError(f"Missing RGB for {sid} in {self.split_dir}")
+
+        gt_no_ext = os.path.join(self.split_dir, f"{sid}_GT")
+
+        bgr = cv2.imread(rgb_p)
+        if bgr is None:
+            raise FileNotFoundError(f"Cannot read: {rgb_p}")
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+        H0, W0 = rgb.shape[:2]
+        rgb_res = cv2.resize(rgb, (self.w, self.h), interpolation = cv2.INTER_LINEAR)
+
+        pts = load_points(gt_no_ext)
+        if pts.size > 0:
+            pts = pts.copy()
+            pts[:, 0] *= (self.w / float(W0))
+            pts[:, 1] *= (self.h / float(H0))
+
+        pts_out = pts.copy()
+        if pts_out.size > 0:
+            pts_out[:, 0] /= self.out_stride
+            pts_out[:, 1] /= self.out_stride
+
+        den = density_from_points(
+            pts_out,
+            self.h_out,
+            self.w_out,
+            sigma = max(1.0, self.sigma / self.out_stride),
+        )
+
+        gt_count = float(len(pts))
+        s = float(den.sum())
+        if gt_count > 0 and s > 0:
+            den *= (gt_count / s)
+
+        rgb_t = _tf_rgb(rgb_res).contiguous()
+        den_t = _den_to_tensor(den)
+
+        if self.return_pts:
+            pts_out_t = torch.from_numpy(pts_out.astype(np.float32, copy = False)).contiguous()
+            return rgb_t, den_t, pts_out_t, f"{sid}.jpg", gt_count
+
+        return rgb_t, den_t, f"{sid}.jpg", gt_count
+
+
+class RGBTCC_TDataset(Dataset):
+    def __init__(
+        self,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
+    ):
+        assert split in ["train", "val", "test"]
+        self.split_dir = os.path.join(root, split)
+        self.h, self.w = img_size
+        self.sigma = float(sigma)
+        self.return_pts = bool(return_pts)
+        self.out_stride = int(out_stride)
+
+        names = [f for f in os.listdir(self.split_dir) if f.endswith("_T.jpg") or f.endswith("_T.png")]
+        ids = sorted({n.replace("_T.jpg", "").replace("_T.png", "") for n in names})
+        if max_count is not None:
+            ids = ids[:max_count]
+        if len(ids) == 0:
+            raise RuntimeError(f"No *_T images in {self.split_dir}")
+        self.ids = ids
+
+        self.h_out = self.h // self.out_stride
+        self.w_out = self.w // self.out_stride
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, idx):
+        sid = self.ids[idx]
+
+        t_p = _pick_existing(os.path.join(self.split_dir, f"{sid}_T"), [".jpg", ".png"])
+        if t_p is None:
+            raise FileNotFoundError(f"Missing T for {sid} in {self.split_dir}")
+
+        gt_no_ext = os.path.join(self.split_dir, f"{sid}_GT")
+
+        t_raw = cv2.imread(t_p)
+        if t_raw is None:
+            raise FileNotFoundError(f"Cannot read: {t_p}")
+        t3 = _to_t3(t_raw)
+
+        H0, W0 = t3.shape[:2]
+        t3_r = cv2.resize(t3, (self.w, self.h), interpolation = cv2.INTER_LINEAR)
+
+        pts = load_points(gt_no_ext)
+        if pts.size > 0:
+            pts = pts.copy()
+            pts[:, 0] *= (self.w / float(W0))
+            pts[:, 1] *= (self.h / float(H0))
+
+        pts_out = pts.copy()
+        if pts_out.size > 0:
+            pts_out[:, 0] /= self.out_stride
+            pts_out[:, 1] /= self.out_stride
+
+        den = density_from_points(
+            pts_out,
+            self.h_out,
+            self.w_out,
+            sigma = max(1.0, self.sigma / self.out_stride),
+        )
+
+        gt_count = float(len(pts))
+        s = float(den.sum())
+        if gt_count > 0 and s > 0:
+            den *= (gt_count / s)
+
+        t3_t = _tf_t3(t3_r).contiguous()
+        den_t = _den_to_tensor(den)
+
+        if self.return_pts:
+            pts_out_t = torch.from_numpy(pts_out.astype(np.float32, copy = False)).contiguous()
+            return t3_t, den_t, pts_out_t, f"{sid}.jpg", gt_count
+
+        return t3_t, den_t, f"{sid}.jpg", gt_count
+
+
+class RGBTCC_PairedDataset(Dataset):
+    def __init__(
+        self,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
+    ):
+        assert split in ["train", "val", "test"]
+        self.split_dir = os.path.join(root, split)
+        self.h, self.w = img_size
+        self.sigma = float(sigma)
+        self.return_pts = bool(return_pts)
+        self.out_stride = int(out_stride)
+
+        names = [f for f in os.listdir(self.split_dir) if f.endswith("_RGB.jpg") or f.endswith("_RGB.png")]
+        ids = sorted({n.replace("_RGB.jpg", "").replace("_RGB.png", "") for n in names})
+        if max_count is not None:
+            ids = ids[:max_count]
+        if len(ids) == 0:
+            raise RuntimeError(f"No *_RGB images in {self.split_dir}")
+        self.ids = ids
+
+        self.h_out = self.h // self.out_stride
+        self.w_out = self.w // self.out_stride
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, idx):
+        sid = self.ids[idx]
+
+        rgb_p = _pick_existing(os.path.join(self.split_dir, f"{sid}_RGB"), [".jpg", ".png"])
+        t_p = _pick_existing(os.path.join(self.split_dir, f"{sid}_T"), [".jpg", ".png"])
+        if rgb_p is None or t_p is None:
+            raise FileNotFoundError(f"Missing RGB/T for {sid} in {self.split_dir}")
+
+        gt_no_ext = os.path.join(self.split_dir, f"{sid}_GT")
+
+        rgb_bgr = cv2.imread(rgb_p)
+        if rgb_bgr is None:
+            raise FileNotFoundError(f"Cannot read: {rgb_p}")
+        rgb = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB)
+
+        t_raw = cv2.imread(t_p)
+        if t_raw is None:
+            raise FileNotFoundError(f"Cannot read: {t_p}")
+        t3 = _to_t3(t_raw)
+
+        H0, W0 = rgb.shape[:2]
+        rgb_r = cv2.resize(rgb, (self.w, self.h), interpolation = cv2.INTER_LINEAR)
+        t3_r = cv2.resize(t3, (self.w, self.h), interpolation = cv2.INTER_LINEAR)
+
+        pts = load_points(gt_no_ext)
+        if pts.size > 0:
+            pts = pts.copy()
+            pts[:, 0] *= (self.w / float(W0))
+            pts[:, 1] *= (self.h / float(H0))
+
+        pts_out = pts.copy()
+        if pts_out.size > 0:
+            pts_out[:, 0] /= self.out_stride
+            pts_out[:, 1] /= self.out_stride
+
+        den = density_from_points(
+            pts_out,
+            self.h_out,
+            self.w_out,
+            sigma = max(1.0, self.sigma / self.out_stride),
+        )
+
+        gt_count = float(len(pts))
+        s = float(den.sum())
+        if gt_count > 0 and s > 0:
+            den *= (gt_count / s)
+
+        rgb_t = _tf_rgb(rgb_r).contiguous()
+        t3_t = _tf_t3(t3_r).contiguous()
+        den_t = _den_to_tensor(den)
+
+        if self.return_pts:
+            pts_out_t = torch.from_numpy(pts_out.astype(np.float32, copy = False)).contiguous()
+            return rgb_t, t3_t, den_t, pts_out_t, f"{sid}.jpg", gt_count
+
+        return rgb_t, t3_t, den_t, f"{sid}.jpg", gt_count
+
+
+class RGBTCC_EarlyFusionDataset(Dataset):
+    def __init__(
+        self,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
+    ):
+        assert split in ["train", "val", "test"]
+        self.split_dir = os.path.join(root, split)
+        self.h, self.w = img_size
+        self.sigma = float(sigma)
+        self.return_pts = bool(return_pts)
+        self.out_stride = int(out_stride)
+
+        names = [f for f in os.listdir(self.split_dir) if f.endswith("_RGB.jpg") or f.endswith("_RGB.png")]
+        ids = sorted({n.replace("_RGB.jpg", "").replace("_RGB.png", "") for n in names})
+        if max_count is not None:
+            ids = ids[:max_count]
+        if len(ids) == 0:
+            raise RuntimeError(f"No *_RGB images in {self.split_dir}")
+        self.ids = ids
+
+        self.h_out = self.h // self.out_stride
+        self.w_out = self.w // self.out_stride
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, idx):
+        sid = self.ids[idx]
+
+        rgb_p = _pick_existing(os.path.join(self.split_dir, f"{sid}_RGB"), [".jpg", ".png"])
+        t_p = _pick_existing(os.path.join(self.split_dir, f"{sid}_T"), [".jpg", ".png"])
+        if rgb_p is None or t_p is None:
+            raise FileNotFoundError(f"Missing RGB/T for {sid} in {self.split_dir}")
+
+        gt_no_ext = os.path.join(self.split_dir, f"{sid}_GT")
+
+        rgb_bgr = cv2.imread(rgb_p)
+        if rgb_bgr is None:
+            raise FileNotFoundError(f"Cannot read: {rgb_p}")
+        rgb = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB)
+
+        t1 = cv2.imread(t_p, cv2.IMREAD_GRAYSCALE)
+        if t1 is None:
+            raise FileNotFoundError(f"Cannot read: {t_p}")
+
+        H0, W0 = rgb.shape[:2]
+        rgb_r = cv2.resize(rgb, (self.w, self.h), interpolation = cv2.INTER_LINEAR)
+        t1_r = cv2.resize(t1, (self.w, self.h), interpolation = cv2.INTER_LINEAR)
+
+        pts = load_points(gt_no_ext)
+        if pts.size > 0:
+            pts = pts.copy()
+            pts[:, 0] *= (self.w / float(W0))
+            pts[:, 1] *= (self.h / float(H0))
+
+        pts_out = pts.copy()
+        if pts_out.size > 0:
+            pts_out[:, 0] /= self.out_stride
+            pts_out[:, 1] /= self.out_stride
+
+        den = density_from_points(
+            pts_out,
+            self.h_out,
+            self.w_out,
+            sigma = max(1.0, self.sigma / self.out_stride),
+        )
+
+        gt_count = float(len(pts))
+        s = float(den.sum())
+        if gt_count > 0 and s > 0:
+            den *= (gt_count / s)
+
+        rgb_t = _tf_rgb(rgb_r).contiguous()
+        t1_t = _tf_t1(t1_r)[0:1, :, :].contiguous()
+        x4 = torch.cat([rgb_t, t1_t], dim = 0).contiguous()
+
+        den_t = _den_to_tensor(den)
+
+        if self.return_pts:
+            pts_out_t = torch.from_numpy(pts_out.astype(np.float32, copy = False)).contiguous()
+            return x4, den_t, pts_out_t, f"{sid}.jpg", gt_count
+
+        return x4, den_t, f"{sid}.jpg", gt_count
+
+
+# -------------------------------------------------------------------------
+# Backwards-compatible API (for older scripts that import RGBTCCDset / RGBTCCBase)
+# -------------------------------------------------------------------------
+from dataclasses import dataclass
+from typing import List, Sequence, Union
+
+
+@dataclass(frozen=True)
+class RGBTCCBase:
+    rgb_path: str
+    t_path: str
+    gt_path: str
+    image_id: str
+
+
+def _first_existing_dir(base, candidates):
+    from pathlib import Path
+    base = Path(base)
+    for c in candidates:
+        p = base / c
+        if p.exists():
+            return p
+    return None
+
+
+def _match_by_stem(dir_path, stem, exts):
+    from pathlib import Path
+    d = Path(dir_path)
+    for e in exts:
+        p = d / f"{stem}{e}"
+        if p.exists():
+            return p
+    matches = sorted(d.glob(f"{stem}.*"))
+    return matches[0] if matches else None
+
+
+def _read_id_list(txt_path):
+    ids = []
+    with open(txt_path, "r") as f:
+        for line in f:
+            s = line.strip()
+            if not s:
+                continue
+            ids.append(s.rsplit(".", 1)[0])
+    return ids
+
+
+def build_splits_rgbt_cc(data_root: str, split_root: str = ""):
+    # Returns base_train, base_val as List[RGBTCCBase].
+    from pathlib import Path
+
+    data_root_p = Path(data_root)
+    split_root_p = Path(split_root) if split_root else None
+
+    def build_one(split_name: str) -> List[RGBTCCBase]:
+        split_dir = data_root_p / split_name
+        if not split_dir.exists():
+            raise FileNotFoundError(f"Split folder not found: {split_dir}")
+
+        rgb_dir = _first_existing_dir(split_dir, ["RGB", "rgb", "images_rgb", "Images/RGB", "images/RGB"])
+        t_dir = _first_existing_dir(split_dir, ["T", "t", "thermal", "Thermal", "images_t", "Images/T", "images/T"])
+        gt_dir = _first_existing_dir(split_dir, ["GT", "gt", "annotations", "ann", "label", "Labels", "Images/GT", "images/GT"])
+
+        if rgb_dir is None or t_dir is None or gt_dir is None:
+            raise FileNotFoundError(
+                f"Expected subfolders (RGB/T/GT) under {split_dir}. "
+                f"Found rgb_dir={rgb_dir}, t_dir={t_dir}, gt_dir={gt_dir}"
+            )
+
+        id_list = None
+        if split_root_p is not None:
+            cand = [f"{split_name}.txt", f"{split_name}_list.txt", f"{split_name}list.txt"]
+            for c in cand:
+                p = split_root_p / c
+                if p.exists():
+                    id_list = _read_id_list(p)
+                    break
+
+        img_exts = [".jpg", ".jpeg", ".png", ".bmp"]
+        gt_exts = [".npy", ".npz", ".mat"]
+
+        if id_list is None:
+            rgb_paths = []
+            for e in img_exts:
+                rgb_paths.extend(rgb_dir.glob(f"*{e}"))
+            stems = sorted({p.stem for p in rgb_paths})
         else:
-            # already 0..1-ish
-            x = np.clip(x, 0.0, 1.0)
+            stems = id_list
 
-    x = torch.from_numpy(x)[None, ...].contiguous()
-    return x
+        base = []
+        for stem in stems:
+            rgb_p = _match_by_stem(rgb_dir, stem, img_exts)
+            t_p = _match_by_stem(t_dir, stem, img_exts)
+            gt_p = _match_by_stem(gt_dir, stem, gt_exts)
+            if rgb_p is None or t_p is None or gt_p is None:
+                continue
+            base.append(RGBTCCBase(str(rgb_p), str(t_p), str(gt_p), stem))
+
+        if len(base) == 0:
+            raise RuntimeError(f"No valid (RGB,T,GT) triplets found for split='{split_name}' under {split_dir}")
+        return base
+
+    base_train = build_one("train")
+    try:
+        base_val = build_one("val")
+    except FileNotFoundError:
+        base_val = build_one("test")
+    return base_train, base_val
 
 
-# -----------------------------
-# Dataset variants used by train_rgbt_patched.py
-# -----------------------------
-class RGBTCC_PairedDatasetPoints(Dataset):
-    """
-    Returns (rgb_3ch, t_3ch, pts_xy, meta_dict)
+def _pad_to_min_size(img, min_h: int, min_w: int):
+    import numpy as np
+    h, w = img.shape[:2]
+    pad_h = max(0, min_h - h)
+    pad_w = max(0, min_w - w)
+    if pad_h == 0 and pad_w == 0:
+        return img
+    if img.ndim == 2:
+        return np.pad(img, ((0, pad_h), (0, pad_w)), mode="constant", constant_values=0)
+    return np.pad(img, ((0, pad_h), (0, pad_w), (0, 0)), mode="constant", constant_values=0)
 
-    - rgb_3ch and t_3ch are normalized tensors
-    - pts_xy are points in resized image coordinates (x,y)
-    - No random augmentation here. Pairwise random aug should be done in train wrapper.
-    """
 
-    def __init__(self, cfg: RGBTCCConfig):
-        self.cfg = cfg
-        self.rgb_dir = os.path.join(cfg.root_dir, cfg.split, "RGB")
-        self.t_dir = os.path.join(cfg.root_dir, cfg.split, "T")
-        self.gt_dir = os.path.join(cfg.root_dir, cfg.split, "GT")
+def _paired_random_crop_params(h: int, w: int, crop_h: int, crop_w: int, deterministic: bool):
+    if h == crop_h:
+        top = 0
+    elif deterministic:
+        top = (h - crop_h) // 2
+    else:
+        top = random.randint(0, h - crop_h)
 
-        self.rgb_paths = _list_sorted_images(self.rgb_dir)
+    if w == crop_w:
+        left = 0
+    elif deterministic:
+        left = (w - crop_w) // 2
+    else:
+        left = random.randint(0, w - crop_w)
+    return top, left
 
-    def __len__(self) -> int:
-        return len(self.rgb_paths)
+
+def _apply_crop_hflip_rgb_t_pts(rgb_np, t_np, pts_xy, crop_h: int, crop_w: int, deterministic: bool, is_train: bool):
+    import numpy as np
+
+    rgb_np = _pad_to_min_size(rgb_np, crop_h, crop_w)
+    t_np = _pad_to_min_size(t_np, crop_h, crop_w)
+
+    h, w = rgb_np.shape[:2]
+    top, left = _paired_random_crop_params(h, w, crop_h, crop_w, deterministic)
+
+    rgb_c = rgb_np[top:top + crop_h, left:left + crop_w]
+    t_c = t_np[top:top + crop_h, left:left + crop_w]
+
+    pts = pts_xy.copy().astype(np.float32)
+    if pts.size > 0:
+        inside = (
+            (pts[:, 0] >= left) & (pts[:, 0] < left + crop_w) &
+            (pts[:, 1] >= top) & (pts[:, 1] < top + crop_h)
+        )
+        pts = pts[inside]
+        pts[:, 0] -= left
+        pts[:, 1] -= top
+
+    do_flip = False
+    if is_train and not deterministic:
+        do_flip = random.random() < 0.5
+
+    if do_flip:
+        rgb_c = np.ascontiguousarray(rgb_c[:, ::-1, :])
+        t_c = np.ascontiguousarray(t_c[:, ::-1] if t_c.ndim == 2 else t_c[:, ::-1, :])
+        if pts.size > 0:
+            pts[:, 0] = (crop_w - 1) - pts[:, 0]
+
+    return rgb_c, t_c, pts
+
+
+class RGBTCCDset(torch.utils.data.Dataset):
+    # Paired RGB-T dataset returning density maps (CSRNet-style).
+    def __init__(
+        self,
+        base: Sequence[Union[RGBTCCBase, dict]],
+        crop_size: int = 224,
+        sigma: float = 15.0,
+        down: int = 8,
+        is_train: bool = True,
+        deterministic: bool = False,
+    ):
+        self.base = list(base)
+        self.crop_h = int(crop_size)
+        self.crop_w = int(crop_size)
+        self.sigma = float(sigma)
+        self.down = int(down)
+        self.is_train = bool(is_train)
+        self.deterministic = bool(deterministic)
+
+    def __len__(self):
+        return len(self.base)
 
     def __getitem__(self, idx: int):
-        rgb_path = self.rgb_paths[idx]
-        base = os.path.splitext(os.path.basename(rgb_path))[0]
+        import numpy as np
+        from pathlib import Path
+        from PIL import Image
 
-        # Thermal path tries same base name
-        t_path = None
-        for ext in [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"]:
-            cand = os.path.join(self.t_dir, base + ext)
-            if os.path.isfile(cand):
-                t_path = cand
-                break
-        if t_path is None:
-            raise FileNotFoundError(f"No thermal image found for base={base} in {self.t_dir}")
+        item = self.base[idx]
+        if isinstance(item, dict):
+            rgb_path = item["rgb_path"]
+            t_path = item["t_path"]
+            gt_path = item["gt_path"]
+            image_id = item.get("image_id", Path(rgb_path).stem)
+        else:
+            rgb_path = item.rgb_path
+            t_path = item.t_path
+            gt_path = item.gt_path
+            image_id = item.image_id
 
-        gt_path = _find_gt_path(self.gt_dir, base, self.cfg.gt_preference)
+        rgb_img = Image.open(rgb_path).convert("RGB")
+        t_img = Image.open(t_path).convert("L")
 
-        rgb = _safe_imread_rgb(rgb_path)
-        t = _safe_imread_gray(t_path)
+        rgb_np = np.asarray(rgb_img)
+        t_np = np.asarray(t_img)
+
         pts = load_points(gt_path)
+        if pts is None:
+            pts = np.zeros((0, 2), dtype=np.float32)
 
-        # Resize + scale points consistently (paired)
-        rgb_rs, pts_rs = _resize_and_scale_points(rgb, pts, self.cfg.img_size)
+        rgb_np, t_np, pts_crop = _apply_crop_hflip_rgb_t_pts(
+            rgb_np, t_np, pts_xy=pts, crop_h=self.crop_h, crop_w=self.crop_w,
+            deterministic=self.deterministic, is_train=self.is_train
+        )
 
-        # Thermal resize (no points scaling needed, already done)
-        t_rs = cv2.resize(t, (self.cfg.img_size[1], self.cfg.img_size[0]), interpolation = cv2.INTER_LINEAR)
+        rgb_t = _normalize_imagenet(_to_chw_tensor_rgb(rgb_np))
 
-        # Convert to tensors
-        rgb_t = _normalize_imagenet(_to_chw_tensor_rgb(rgb_rs))
-        t_1 = _to_chw_tensor_gray01(t_rs)
-        t_3 = t_1.repeat(3, 1, 1)  # to 3ch for late/adaptive models
+        t_1 = _to_chw_tensor_gray01(t_np)
+        t_3 = t_1.repeat(3, 1, 1)
         t_t = _normalize_imagenet(t_3)
 
-        pts_t = torch.from_numpy(pts_rs.astype(np.float32))
+        out_h = self.crop_h // self.down
+        out_w = self.crop_w // self.down
+
+        if pts_crop.size == 0:
+            den = np.zeros((out_h, out_w), dtype=np.float32)
+        else:
+            pts_ds = pts_crop / float(self.down)
+        # Use the local CSRNet-style density builder (count-preserving normalization)
+        den = density_from_points(pts_ds, out_h, out_w, sigma=self.sigma / float(self.down))
+
+        den_t = torch.from_numpy(den).unsqueeze(0).float()
 
         meta = {
             "rgb_path": rgb_path,
             "t_path": t_path,
             "gt_path": gt_path,
-            "base": base,
+            "count": int(pts_crop.shape[0]),
+            "crop_size": (self.crop_h, self.crop_w),
+            "down": self.down,
         }
+        return rgb_t, t_t, den_t, image_id, meta
 
-        return rgb_t, t_t, pts_t, meta
 
+class RGBTCC_RGBDset(torch.utils.data.Dataset):
+    def __init__(self, base, crop_size: int = 224, sigma: float = 15.0, down: int = 8, is_train: bool = True, deterministic: bool = False):
+        self.paired = RGBTCCDset(base, crop_size=crop_size, sigma=sigma, down=down, is_train=is_train, deterministic=deterministic)
 
-class RGBTCC_ThermalDatasetPoints(Dataset):
-    """
-    Returns (t_3ch, pts_xy, meta_dict)
-    Useful for thermal-only baseline (keeps same point protocol).
-    """
-
-    def __init__(self, cfg: RGBTCCConfig):
-        self.cfg = cfg
-        self.t_dir = os.path.join(cfg.root_dir, cfg.split, "T")
-        self.rgb_dir = os.path.join(cfg.root_dir, cfg.split, "RGB")
-        self.gt_dir = os.path.join(cfg.root_dir, cfg.split, "GT")
-
-        # Use RGB list as anchor for matching GT names
-        self.rgb_paths = _list_sorted_images(self.rgb_dir)
-
-    def __len__(self) -> int:
-        return len(self.rgb_paths)
+    def __len__(self):
+        return len(self.paired)
 
     def __getitem__(self, idx: int):
-        rgb_path = self.rgb_paths[idx]
-        base = os.path.splitext(os.path.basename(rgb_path))[0]
-
-        t_path = None
-        for ext in [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"]:
-            cand = os.path.join(self.t_dir, base + ext)
-            if os.path.isfile(cand):
-                t_path = cand
-                break
-        if t_path is None:
-            raise FileNotFoundError(f"No thermal image found for base={base} in {self.t_dir}")
-
-        gt_path = _find_gt_path(self.gt_dir, base, self.cfg.gt_preference)
-
-        t = _safe_imread_gray(t_path)
-        pts = load_points(gt_path)
-
-        # Need resize reference for point scaling, use RGB size
-        rgb = _safe_imread_rgb(rgb_path)
-        rgb_rs, pts_rs = _resize_and_scale_points(rgb, pts, self.cfg.img_size)
-
-        t_rs = cv2.resize(t, (self.cfg.img_size[1], self.cfg.img_size[0]), interpolation = cv2.INTER_LINEAR)
-
-        t_1 = _to_chw_tensor_gray01(t_rs)
-        t_3 = t_1.repeat(3, 1, 1)
-        t_t = _normalize_imagenet(t_3)
-
-        pts_t = torch.from_numpy(pts_rs.astype(np.float32))
-
-        meta = {
-            "t_path": t_path,
-            "gt_path": gt_path,
-            "base": base,
-        }
-
-        return t_t, pts_t, meta
+        rgb_t, _t_t, den_t, image_id, meta = self.paired[idx]
+        return rgb_t, den_t, image_id, meta
 
 
-class RGBTCC_RGBDatasetPoints(Dataset):
-    """
-    Returns (rgb_3ch, pts_xy, meta_dict)
-    Useful for RGB-only baseline.
-    """
+class RGBTCC_TDset(torch.utils.data.Dataset):
+    def __init__(self, base, crop_size: int = 224, sigma: float = 15.0, down: int = 8, is_train: bool = True, deterministic: bool = False):
+        self.paired = RGBTCCDset(base, crop_size=crop_size, sigma=sigma, down=down, is_train=is_train, deterministic=deterministic)
 
-    def __init__(self, cfg: RGBTCCConfig):
-        self.cfg = cfg
-        self.rgb_dir = os.path.join(cfg.root_dir, cfg.split, "RGB")
-        self.gt_dir = os.path.join(cfg.root_dir, cfg.split, "GT")
-        self.rgb_paths = _list_sorted_images(self.rgb_dir)
-
-    def __len__(self) -> int:
-        return len(self.rgb_paths)
+    def __len__(self):
+        return len(self.paired)
 
     def __getitem__(self, idx: int):
-        rgb_path = self.rgb_paths[idx]
-        base = os.path.splitext(os.path.basename(rgb_path))[0]
-        gt_path = _find_gt_path(self.gt_dir, base, self.cfg.gt_preference)
-
-        rgb = _safe_imread_rgb(rgb_path)
-        pts = load_points(gt_path)
-
-        rgb_rs, pts_rs = _resize_and_scale_points(rgb, pts, self.cfg.img_size)
-
-        rgb_t = _normalize_imagenet(_to_chw_tensor_rgb(rgb_rs))
-        pts_t = torch.from_numpy(pts_rs.astype(np.float32))
-
-        meta = {"rgb_path": rgb_path, "gt_path": gt_path, "base": base}
-        return rgb_t, pts_t, meta
-
-
-class RGBTCC_EarlyFusionDatasetPoints(Dataset):
-    """
-    Returns (rgbt_4ch, pts_xy, meta_dict)
-    Early fusion expects a 4-channel tensor: [R,G,B,T].
-    """
-
-    def __init__(self, cfg: RGBTCCConfig):
-        self.cfg = cfg
-        self.rgb_dir = os.path.join(cfg.root_dir, cfg.split, "RGB")
-        self.t_dir = os.path.join(cfg.root_dir, cfg.split, "T")
-        self.gt_dir = os.path.join(cfg.root_dir, cfg.split, "GT")
-
-        self.rgb_paths = _list_sorted_images(self.rgb_dir)
-
-    def __len__(self) -> int:
-        return len(self.rgb_paths)
-
-    def __getitem__(self, idx: int):
-        rgb_path = self.rgb_paths[idx]
-        base = os.path.splitext(os.path.basename(rgb_path))[0]
-
-        t_path = None
-        for ext in [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"]:
-            cand = os.path.join(self.t_dir, base + ext)
-            if os.path.isfile(cand):
-                t_path = cand
-                break
-        if t_path is None:
-            raise FileNotFoundError(f"No thermal image found for base={base} in {self.t_dir}")
-
-        gt_path = _find_gt_path(self.gt_dir, base, self.cfg.gt_preference)
-
-        rgb = _safe_imread_rgb(rgb_path)
-        t = _safe_imread_gray(t_path)
-        pts = load_points(gt_path)
-
-        rgb_rs, pts_rs = _resize_and_scale_points(rgb, pts, self.cfg.img_size)
-        t_rs = cv2.resize(t, (self.cfg.img_size[1], self.cfg.img_size[0]), interpolation = cv2.INTER_LINEAR)
-
-        rgb_chw = _to_chw_tensor_rgb(rgb_rs)
-        t_1 = _to_chw_tensor_gray01(t_rs)  # 1xHxW
-
-        # Concatenate 4 channels and normalize
-        rgbt_4 = torch.cat([rgb_chw, t_1], dim = 0)
-        rgbt_4 = _normalize_4ch(rgbt_4)
-
-        pts_t = torch.from_numpy(pts_rs.astype(np.float32))
-
-        meta = {"rgb_path": rgb_path, "t_path": t_path, "gt_path": gt_path, "base": base}
-        return rgbt_4, pts_t, meta
+        _rgb_t, t_t, den_t, image_id, meta = self.paired[idx]
+        return t_t, den_t, image_id, meta

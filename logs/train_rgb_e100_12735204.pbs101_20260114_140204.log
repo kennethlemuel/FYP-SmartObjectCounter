@@ -1,0 +1,7 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgb_e100_12735204.pbs101_20260114_140204.log
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 23, in <module>
+    from datasets.rgbt_cc import (
+    ...<5 lines>...
+    )
+ImportError: cannot import name 'RGBTCC_RGBDataset' from 'datasets.rgbt_cc' (/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/datasets/rgbt_cc.py)
