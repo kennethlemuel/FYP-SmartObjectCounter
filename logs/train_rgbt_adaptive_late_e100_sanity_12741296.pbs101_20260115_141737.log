@@ -1,0 +1,16 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100_sanity_12741296.pbs101_20260115_141737.log
+[job] name=train_rgbt_adaptive_late_e100_sanity id=12741296.pbs101 host=x1000c0s7b0n1 time=Thu Jan 15 14:17:37 +08 2026
+[init] device = cuda
+[init] train = 1030  val = 200  workers = 4
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 665, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 475, in main
+    gate_params = list(model.gate.parameters())
+                       ^^^^^^^^^^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1928, in __getattr__
+    raise AttributeError(
+        f"'{type(self).__name__}' object has no attribute '{name}'"
+    )
+AttributeError: 'CSRNetRGBT_AdaptiveLate' object has no attribute 'gate'

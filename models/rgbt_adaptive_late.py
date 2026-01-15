@@ -59,7 +59,9 @@ class _MultiScaleGateNet(nn.Module):
                 x_s = x
             else:
                 x_s = F.avg_pool2d(x, kernel_size = s, stride = s)
+
             logit_s = self._logits(x_s)
+
             if logit_s.shape[-2:] != (H, W):
                 logit_s = F.interpolate(
                     logit_s,
@@ -67,6 +69,7 @@ class _MultiScaleGateNet(nn.Module):
                     mode = "bilinear",
                     align_corners = False,
                 )
+
             logits_scales.append(logit_s)
 
         logits = torch.stack(logits_scales, dim = 0).mean(dim = 0)
@@ -90,17 +93,28 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
 
     def __init__(
         self,
-        load_weights: bool = True,
+        load_imagenet: bool = True,
+        load_weights: bool = None,          # backward-compatible alias
         gate_hidden: int = 32,
         gate_scales = (1, 2, 4),
         output_size = None,
         count_preserve_resize: bool = True,
+        **kwargs,                           # swallow any extra unexpected args safely
     ):
         super().__init__()
-        self.rgb_net = CSRNet(load_weights = load_weights)
-        self.t_net = CSRNet(load_weights = load_weights)
+
+        # Backward compatibility:
+        # - old code might pass load_weights
+        # - new code passes load_imagenet
+        if load_weights is not None:
+            load_imagenet = bool(load_weights)
+
+        self.rgb_net = CSRNet(load_imagenet = bool(load_imagenet))
+        self.t_net = CSRNet(load_imagenet = bool(load_imagenet))
 
         self.gate_net = _MultiScaleGateNet(hidden = gate_hidden, scales = gate_scales)
+        # Backward-compatible alias for older training code
+        self.gate = self.gate_net
 
         # If set, force both expert outputs to this (H, W) before gating.
         self.output_size = output_size
