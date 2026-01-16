@@ -1,0 +1,35 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100_sanity_12749547.pbs101_20260116_231803.log
+[job] name=train_rgbt_adaptive_late_e100_sanity id=12749547.pbs101 host=x1000c0s3b0n1 time=Fri Jan 16 23:18:03 +08 2026
+[init] device = cuda
+[init] train = 1030  val = 200  workers = 4
+/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py:385: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = GradScaler(enabled = bool(args.amp))
+[e001 s0001/1030] loss = 1282.213135
+[e001 s0050/1030] loss = 612.264936
+[e001 s0100/1030] loss = 307.233693
+[e001 s0150/1030] loss = 204.849173
+[e001 s0200/1030] loss = 153.639485
+[e001 s0250/1030] loss = 122.912601
+[e001 s0300/1030] loss = 102.427863
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 566, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 463, in main
+    den_pred = model(x_rgb, x_t)
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/models/rgbt_adaptive_late.py", line 216, in forward
+    gate = self.gate(pred_rgb, pred_t)
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/models/rgbt_adaptive_late.py", line 46, in forward
+    [pred_rgb, pred_t, (pred_rgb - pred_t).abs(), 0.5 * (pred_rgb + pred_t)],
+                        ~~~~~~~~~^~~~~~~~
+RuntimeError: The size of tensor a (28) must match the size of tensor b (18) at non-singleton dimension 3

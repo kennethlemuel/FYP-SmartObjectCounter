@@ -139,16 +139,16 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
         count_preserve_resize: bool = True,
     ):
         super().__init__()
-
-        # Resolve aliasing cleanly
-        if load_weights is None:
-            load_weights = True if load_imagenet is None else bool(load_imagenet)
+        # Resolve aliasing cleanly for both old and new arg names
+        if load_imagenet is None:
+            load_imagenet = True if load_weights is None else bool(load_weights)
         else:
-            if load_imagenet is not None and bool(load_imagenet) != bool(load_weights):
+            if load_weights is not None and bool(load_imagenet) != bool(load_weights):
                 raise ValueError("Conflicting values: load_imagenet and load_weights differ.")
 
-        self.rgb_net = CSRNet(load_weights = load_weights)
-        self.t_net = CSRNet(load_weights = load_weights)
+        # CSRNet in your repo uses 'load_imagenet' (not 'load_weights')
+        self.rgb_net = CSRNet(load_imagenet = bool(load_imagenet))
+        self.t_net = CSRNet(load_imagenet = bool(load_imagenet))
 
         # IMPORTANT: expose attribute name expected by your train script
         self.gate = _MultiScaleGateNet(hidden = gate_hidden, scales = gate_scales)

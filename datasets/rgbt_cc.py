@@ -13,6 +13,43 @@ import random
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
 _IMAGENET_STD = [0.229, 0.224, 0.225]
 
+
+def _to_chw_tensor_rgb(img_rgb_hwc: np.ndarray) -> torch.Tensor:
+    # uint8 HWC RGB -> float CHW in [0,1]
+    x = torch.from_numpy(np.ascontiguousarray(img_rgb_hwc))
+    if x.ndim != 3 or x.shape[2] != 3:
+        raise ValueError(f"Expected HWC RGB, got {tuple(x.shape)}")
+    x = x.permute(2, 0, 1).float().div(255.0)
+    return x.contiguous()
+
+
+def _to_chw_tensor_gray01(img_gray_hw: np.ndarray) -> torch.Tensor:
+    # uint8 HW gray -> float 1xHxW in [0,1]
+    x = torch.from_numpy(np.ascontiguousarray(img_gray_hw))
+    if x.ndim != 2:
+        raise ValueError(f"Expected HW gray, got {tuple(x.shape)}")
+    x = x.unsqueeze(0).float().div(255.0)
+    return x.contiguous()
+
+
+def _normalize_imagenet(x: torch.Tensor) -> torch.Tensor:
+    # x: CHW float tensor
+    if x.ndim != 3:
+        raise ValueError(f"Expected CHW, got {tuple(x.shape)}")
+
+    c = x.shape[0]
+    if c == 3:
+        mean = x.new_tensor(_IMAGENET_MEAN).view(3, 1, 1)
+        std = x.new_tensor(_IMAGENET_STD).view(3, 1, 1)
+    elif c == 1:
+        mean = x.new_tensor([0.485]).view(1, 1, 1)
+        std = x.new_tensor([0.229]).view(1, 1, 1)
+    else:
+        raise ValueError(f"Unsupported channel count: {c}")
+
+    return (x - mean) / std
+
+
 def seed_worker(worker_id: int) -> None:
     """Seed each dataloader worker deterministically (NumPy + Python RNG).
 
@@ -635,7 +672,7 @@ def build_splits_rgbt_cc(data_root: str, split_root: str = ""):
                 rgb_path = str(rgb_p),
                 t_path = str(t_p),
                 gt_path = gt_no_ext,
-                sample_id = sid,
+                image_id = sid,
             ))
 
         if len(base) == 0:
@@ -688,6 +725,12 @@ def _apply_crop_hflip_rgb_t_pts(rgb_np, t_np, pts_xy, crop_h: int, crop_w: int, 
 
     rgb_np = _pad_to_min_size(rgb_np, crop_h, crop_w)
     t_np = _pad_to_min_size(t_np, crop_h, crop_w)
+
+    # make both modalities the same H,W before choosing crop coords
+    H = max(rgb_np.shape[0], t_np.shape[0])
+    W = max(rgb_np.shape[1], t_np.shape[1])
+    rgb_np = _pad_to_min_size(rgb_np, H, W)
+    t_np = _pad_to_min_size(t_np, H, W)
 
     h, w = rgb_np.shape[:2]
     top, left = _paired_random_crop_params(h, w, crop_h, crop_w, deterministic)
@@ -785,8 +828,7 @@ class RGBTCCDset(torch.utils.data.Dataset):
             den = np.zeros((out_h, out_w), dtype=np.float32)
         else:
             pts_ds = pts_crop / float(self.down)
-        # Use the local CSRNet-style density builder (count-preserving normalization)
-        den = density_from_points(pts_ds, out_h, out_w, sigma=self.sigma / float(self.down))
+            den = density_from_points(pts_ds, out_h, out_w, sigma=self.sigma / float(self.down))
 
         den_t = torch.from_numpy(den).unsqueeze(0).float()
 
