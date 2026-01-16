@@ -7,10 +7,21 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from scipy.ndimage import gaussian_filter
 from scipy.io import loadmat
+import random
 
 
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
 _IMAGENET_STD = [0.229, 0.224, 0.225]
+
+def seed_worker(worker_id: int) -> None:
+    """Seed each dataloader worker deterministically (NumPy + Python RNG).
+
+    Use together with a torch.Generator passed to DataLoader(generator=...).
+    """
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
 
 _tf_rgb = transforms.Compose([
     transforms.ToTensor(),
@@ -499,60 +510,140 @@ def _read_id_list(txt_path):
             ids.append(s.rsplit(".", 1)[0])
     return ids
 
-
 def build_splits_rgbt_cc(data_root: str, split_root: str = ""):
-    # Returns base_train, base_val as List[RGBTCCBase].
+    """
+    Supports BOTH layouts:
+
+    (1) Structured:
+        <data_root>/<split>/RGB/<id>.(jpg/png/...)
+        <data_root>/<split>/T/<id>.(jpg/png/...)
+        <data_root>/<split>/GT/<id>.json   (or .mat)
+
+    (2) Flat (your case):
+        <data_root>/<split>/<id>_RGB.(jpg/png/...)
+        <data_root>/<split>/<id>_T.(jpg/png/...)
+        <data_root>/<split>/<id>_GT.json   (or .mat)
+    """
     from pathlib import Path
 
     data_root_p = Path(data_root)
     split_root_p = Path(split_root) if split_root else None
 
-    def build_one(split_name: str) -> List[RGBTCCBase]:
+    rgb_exts = [".jpg", ".jpeg", ".png", ".bmp"]
+    gt_exts = [".json", ".mat"]
+
+    def _read_id_list(list_path: Path):
+        ids = []
+        for line in list_path.read_text().splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            # allow "3093", "3093_RGB.jpg", "3093_T.jpg", etc.
+            stem = Path(s).stem
+            if stem.endswith("_RGB"):
+                stem = stem[:-4]
+            elif stem.endswith("_T"):
+                stem = stem[:-2]
+            elif stem.endswith("_GT"):
+                stem = stem[:-3]
+            ids.append(stem)
+        return ids
+
+    def _first_existing_dir(parent: Path, names):
+        for n in names:
+            p = parent / n
+            if p.is_dir():
+                return p
+        return None
+
+    def _infer_ids_from_flat(split_dir: Path):
+        # Take IDs from *_RGB.* primarily (most reliable)
+        ids = set()
+        for p in split_dir.iterdir():
+            if not p.is_file():
+                continue
+            name = p.name
+            if "_RGB." in name:
+                ids.add(name.split("_RGB.", 1)[0])
+        # Fallback: union from T/GT if RGB missing
+        if len(ids) == 0:
+            for p in split_dir.iterdir():
+                if not p.is_file():
+                    continue
+                name = p.name
+                if "_T." in name:
+                    ids.add(name.split("_T.", 1)[0])
+                elif "_GT." in name:
+                    ids.add(name.split("_GT.", 1)[0])
+        return sorted(ids)
+
+    def build_one(split_name: str):
         split_dir = data_root_p / split_name
         if not split_dir.exists():
             raise FileNotFoundError(f"Split folder not found: {split_dir}")
 
-        rgb_dir = _first_existing_dir(split_dir, ["RGB", "rgb", "images_rgb", "Images/RGB", "images/RGB"])
-        t_dir = _first_existing_dir(split_dir, ["T", "t", "thermal", "Thermal", "images_t", "Images/T", "images/T"])
-        gt_dir = _first_existing_dir(split_dir, ["GT", "gt", "annotations", "ann", "label", "Labels", "Images/GT", "images/GT"])
-
-        if rgb_dir is None or t_dir is None or gt_dir is None:
-            raise FileNotFoundError(
-                f"Expected subfolders (RGB/T/GT) under {split_dir}. "
-                f"Found rgb_dir={rgb_dir}, t_dir={t_dir}, gt_dir={gt_dir}"
-            )
-
+        # optional official id list
         id_list = None
         if split_root_p is not None:
-            cand = [f"{split_name}.txt", f"{split_name}_list.txt", f"{split_name}list.txt"]
-            for c in cand:
-                p = split_root_p / c
-                if p.exists():
-                    id_list = _read_id_list(p)
-                    break
+            list_path = split_root_p / f"{split_name}.txt"
+            if list_path.exists():
+                id_list = _read_id_list(list_path)
 
-        img_exts = [".jpg", ".jpeg", ".png", ".bmp"]
-        gt_exts = [".npy", ".npz", ".mat"]
+        # Detect layout
+        rgb_dir = _first_existing_dir(split_dir, ["RGB", "rgb", "visible", "vis", "Vis"])
+        t_dir = _first_existing_dir(split_dir, ["T", "t", "thermal", "Thermal", "ir", "IR"])
+        gt_dir = _first_existing_dir(split_dir, ["GT", "gt", "labels", "label", "ann", "annotations", "Annotation"])
 
+        is_structured = (rgb_dir is not None) and (t_dir is not None) and (gt_dir is not None)
+
+        # IDs to iterate
         if id_list is None:
-            rgb_paths = []
-            for e in img_exts:
-                rgb_paths.extend(rgb_dir.glob(f"*{e}"))
-            stems = sorted({p.stem for p in rgb_paths})
-        else:
-            stems = id_list
+            if is_structured:
+                # infer from RGB folder
+                stems = []
+                for p in rgb_dir.iterdir():
+                    if p.is_file() and p.suffix.lower() in rgb_exts:
+                        stems.append(p.stem)
+                id_list = sorted(stems)
+            else:
+                id_list = _infer_ids_from_flat(split_dir)
 
         base = []
-        for stem in stems:
-            rgb_p = _match_by_stem(rgb_dir, stem, img_exts)
-            t_p = _match_by_stem(t_dir, stem, img_exts)
-            gt_p = _match_by_stem(gt_dir, stem, gt_exts)
-            if rgb_p is None or t_p is None or gt_p is None:
+        missing = 0
+
+        for sid in id_list:
+            if is_structured:
+                rgb_p = _match_by_stem(rgb_dir, sid, exts = rgb_exts)
+                t_p = _match_by_stem(t_dir, sid, exts = rgb_exts)
+
+                gt_p = _match_by_stem(gt_dir, sid, exts = gt_exts)
+                # store GT path WITHOUT extension because load_points() appends .json / .mat
+                gt_no_ext = str((gt_dir / sid))
+
+            else:
+                rgb_p = _match_by_stem(split_dir, f"{sid}_RGB", exts = rgb_exts)
+                t_p = _match_by_stem(split_dir, f"{sid}_T", exts = rgb_exts)
+
+                gt_p = _match_by_stem(split_dir, f"{sid}_GT", exts = gt_exts)
+                gt_no_ext = str((split_dir / f"{sid}_GT"))
+
+            if (rgb_p is None) or (t_p is None) or (gt_p is None):
+                missing += 1
                 continue
-            base.append(RGBTCCBase(str(rgb_p), str(t_p), str(gt_p), stem))
+
+            base.append(RGBTCCBase(
+                rgb_path = str(rgb_p),
+                t_path = str(t_p),
+                gt_path = gt_no_ext,
+                sample_id = sid,
+            ))
 
         if len(base) == 0:
             raise RuntimeError(f"No valid (RGB,T,GT) triplets found for split='{split_name}' under {split_dir}")
+
+        if missing > 0:
+            print(f"[RGBT-CC] Warning: {missing} samples skipped in split='{split_name}' due to missing RGB/T/GT files.")
+
         return base
 
     base_train = build_one("train")

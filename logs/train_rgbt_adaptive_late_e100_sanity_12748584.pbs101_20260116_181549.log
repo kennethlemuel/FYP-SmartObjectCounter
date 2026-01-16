@@ -1,0 +1,23 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100_sanity_12748584.pbs101_20260116_181549.log
+[job] name=train_rgbt_adaptive_late_e100_sanity id=12748584.pbs101 host=x1000c0s2b0n1 time=Fri Jan 16 18:15:49 +08 2026
+[init] device = cuda
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 566, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 228, in main
+    base_train, base_val = build_splits_rgbt_cc(args.data_root)
+                           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/datasets/rgbt_cc.py", line 649, in build_splits_rgbt_cc
+    base_train = build_one("train")
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/datasets/rgbt_cc.py", line 634, in build_one
+    base.append(RGBTCCBase(
+                ~~~~~~~~~~^
+        rgb_path = str(rgb_p),
+        ^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        sample_id = sid,
+        ^^^^^^^^^^^^^^^^
+    ))
+    ^
+TypeError: RGBTCCBase.__init__() got an unexpected keyword argument 'sample_id'

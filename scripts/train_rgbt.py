@@ -12,13 +12,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import GradScaler
 
-from datasets.rgbt_cc import (
-    RGBTCCDset,
-    RGBTCC_RGBDset,
-    RGBTCC_TDset,
-    build_splits_rgbt_cc,
-    seed_worker,
-)
+try:
+    from datasets.rgbt_cc import (
+        RGBTCCDset,
+        RGBTCC_RGBDset,
+        RGBTCC_TDset,
+        build_splits_rgbt_cc,
+        seed_worker,
+    )
+except ImportError:
+    from datasets.rgbt_cc import (
+        RGBTCCDset,
+        RGBTCC_RGBDset,
+        RGBTCC_TDset,
+        build_splits_rgbt_cc,
+    )
+
+    def seed_worker(worker_id: int) -> None:
+        """Fallback worker seeding if datasets.rgbt_cc doesn't export seed_worker."""
+        worker_seed = torch.initial_seed() % 2**32
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
 from models.csrnet import CSRNet
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
