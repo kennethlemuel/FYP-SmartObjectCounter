@@ -1,0 +1,8 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100_sanity_12749870.pbs101_20260117_034508.log
+[job] name=train_rgbt_adaptive_late_e100_sanity id=12749870.pbs101 host=x1000c0s3b0n0 time=Sat Jan 17 03:45:08 +08 2026
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 15, in <module>
+    from datasets.rgbt_cc import (
+    ...<8 lines>...
+    )
+ImportError: cannot import name 'seed_worker' from 'datasets.rgbt_cc' (/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/datasets/rgbt_cc.py)
