@@ -4,15 +4,16 @@ import random
 import time
 from pathlib import Path
 from typing import Dict
-    
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# PyTorch 2.6 deprecates torch.cuda.amp.GradScaler
 try:
     from torch.amp import GradScaler
-except Exception:
+except Exception:  # pragma: no cover
     from torch.cuda.amp import GradScaler
 
 from datasets.rgbt_cc import (
@@ -23,20 +24,8 @@ from datasets.rgbt_cc import (
     RGBTCC_TDataset,
     RGBTCC_PairedDataset,
     build_splits_rgbt_cc,
+    seed_worker,
 )
-
-try:
-    from datasets.rgbt_cc import seed_worker  # type: ignore
-except Exception:
-    import numpy as _np
-    import random as _random
-
-    def seed_worker(worker_id: int) -> None:
-        worker_seed = torch.initial_seed() % 2**32
-        _np.random.seed(worker_seed)
-        _random.seed(worker_seed)
-
-
 from models.csrnet import CSRNet
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
@@ -65,11 +54,13 @@ def _set_requires_grad(module: nn.Module, req: bool) -> None:
 
 @torch.no_grad()
 def _count_from_density(den: torch.Tensor) -> torch.Tensor:
+    # den: [B,1,H,W]
     return den.sum(dim = (2, 3))
 
 
 @torch.no_grad()
 def _partition_density(den: torch.Tensor, grid: int) -> torch.Tensor:
+    """Return per-cell counts for GAMEk (grid x grid)."""
     b, _c, h, w = den.shape
     if grid <= 1:
         return den.sum(dim = (2, 3)).view(b, 1)
@@ -79,7 +70,7 @@ def _partition_density(den: torch.Tensor, grid: int) -> torch.Tensor:
     if gh != h or gw != w:
         den = F.pad(den, (0, gw - w, 0, gh - h))
 
-    _, _, hp, wp = den.shape
+    _b, _c2, hp, wp = den.shape
     cell_h = hp // grid
     cell_w = wp // grid
     den = den.view(b, 1, grid, cell_h, grid, cell_w)
@@ -87,7 +78,7 @@ def _partition_density(den: torch.Tensor, grid: int) -> torch.Tensor:
     return den.view(b, grid * grid)
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def eval_one_epoch(
     model: nn.Module,
     loader: torch.utils.data.DataLoader,
@@ -95,7 +86,6 @@ def eval_one_epoch(
     amp: bool,
 ) -> Dict[str, float]:
     model.eval()
-
     mae = 0.0
     rmse = 0.0
     game1 = 0.0
@@ -126,6 +116,7 @@ def eval_one_epoch(
             else:
                 den_pred = model(x)
 
+        # Metrics in fp32 for stability
         den_pred = den_pred.float()
         den_gt = den_gt.float()
 
@@ -143,12 +134,16 @@ def eval_one_epoch(
         game1 += float(g1.sum())
         game2 += float(g2.sum())
         game3 += float(g3.sum())
-
-        n += cnt_gt.shape[0]
+        n += int(cnt_gt.shape[0])
 
     if n == 0:
-        nan = float("nan")
-        return {"mae": nan, "rmse": nan, "game1": nan, "game2": nan, "game3": nan}
+        return {
+            "mae": float("nan"),
+            "rmse": float("nan"),
+            "game1": float("nan"),
+            "game2": float("nan"),
+            "game3": float("nan"),
+        }
 
     mae /= n
     rmse = (rmse / n) ** 0.5
@@ -158,8 +153,39 @@ def eval_one_epoch(
     return {"mae": mae, "rmse": rmse, "game1": game1, "game2": game2, "game3": game3}
 
 
+def _load_into(net: nn.Module, ckpt_path: str, map_location: str = "cpu") -> None:
+    if not ckpt_path:
+        return
+    ckpt_path = os.path.expanduser(ckpt_path)
+    if not os.path.isfile(ckpt_path):
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+    ckpt = torch.load(ckpt_path, map_location = map_location)
+    if isinstance(ckpt, dict):
+        for k in ("state_dict", "model", "model_state_dict", "net", "network"):
+            if k in ckpt and isinstance(ckpt[k], dict):
+                ckpt = ckpt[k]
+                break
+
+    if not isinstance(ckpt, dict):
+        raise ValueError(f"Unsupported checkpoint format: {type(ckpt)}")
+
+    sd = {kk.replace("module.", ""): vv for kk, vv in ckpt.items()}
+
+    # If a full-model ckpt is passed, try to strip a known prefix.
+    for prefix in ("rgb_net.", "t_net."):
+        if any(k.startswith(prefix) for k in sd.keys()):
+            sd2 = {k[len(prefix):]: v for k, v in sd.items() if k.startswith(prefix)}
+            if len(sd2) >= 10:
+                sd = sd2
+            break
+
+    res = net.load_state_dict(sd, strict = False)
+    print(f"[init] warm-start from {ckpt_path} (missing={len(res.missing_keys)} unexpected={len(res.unexpected_keys)})")
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(allow_abbrev = False)
     ap.add_argument("--data_root", type = str, required = True)
     ap.add_argument("--out_dir", type = str, required = True)
 
@@ -170,19 +196,21 @@ def main() -> None:
 
     ap.add_argument("--seed", type = int, default = 0)
     ap.add_argument("--deterministic", action = "store_true")
-    ap.add_argument("--val_deterministic", action = "store_true")
 
     ap.add_argument("--lr", type = float, default = 1e-5)
     ap.add_argument("--weight_decay", type = float, default = 1e-4)
     ap.add_argument("--use_onecycle", action = "store_true")
     ap.add_argument("--max_lr", type = float, default = 1e-5)
 
-    ap.add_argument("--gate_lr", type = float, default = 1e-5)
-    ap.add_argument("--max_gate_lr", type = float, default = 1e-5)
+    # Optional warm-start for *both* late and adaptive_late (keeps comparisons fair when enabled)
     ap.add_argument("--init_rgb_ckpt", type = str, default = "")
     ap.add_argument("--init_t_ckpt", type = str, default = "")
-    ap.add_argument("--freeze_backbones_epochs", type = int, default = 0)
 
+    # Adaptive-late gate LR (separate param group)
+    ap.add_argument("--gate_lr", type = float, default = 1e-5)
+    ap.add_argument("--max_gate_lr", type = float, default = 1e-5)
+
+    ap.add_argument("--freeze_backbones_epochs", type = int, default = 0)
     ap.add_argument("--amp", action = "store_true")
     ap.add_argument("--grad_accum", type = int, default = 1)
     ap.add_argument("--clip_grad", type = float, default = 0.0)
@@ -201,9 +229,11 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[init] device = {device}")
 
-    base_train, _base_val = build_splits_rgbt_cc(args.data_root)
+    base_train, base_val = build_splits_rgbt_cc(args.data_root)
+
     is_train_det = bool(args.deterministic)
 
+    # Train datasets (224 crops by default)
     if args.mode == "rgb":
         ds_train = RGBTCC_RGBDset(base_train, crop_size = args.crop_size, sigma = args.sigma, down = args.down, is_train = True, deterministic = is_train_det)
     elif args.mode == "t":
@@ -211,6 +241,7 @@ def main() -> None:
     else:
         ds_train = RGBTCCDset(base_train, crop_size = args.crop_size, sigma = args.sigma, down = args.down, is_train = True, deterministic = is_train_det)
 
+    # Val is full-image, deterministic
     data_root_p = Path(args.data_root)
     val_split = "val" if (data_root_p / "val").exists() else "test"
 
@@ -221,96 +252,79 @@ def main() -> None:
     else:
         ds_val = RGBTCC_PairedDataset(root = args.data_root, split = val_split, img_size = (768, 1024), sigma = args.sigma, return_pts = False, out_stride = args.down)
 
-    g = torch.Generator()
-    g.manual_seed(args.seed)
+    g_train = torch.Generator()
+    g_train.manual_seed(args.seed)
+    g_val = torch.Generator()
+    g_val.manual_seed(args.seed + 1)
 
-    train_workers = int(args.workers)
     dl_train = torch.utils.data.DataLoader(
         ds_train,
         batch_size = args.batch_size,
         shuffle = True,
-        num_workers = train_workers,
+        num_workers = args.workers,
         pin_memory = True,
         drop_last = False,
-        worker_init_fn = seed_worker if train_workers > 0 else None,
-        generator = g if train_workers > 0 else None,
+        worker_init_fn = seed_worker,
+        generator = g_train,
     )
 
-    val_workers = 0 if args.val_deterministic else int(args.workers)
     dl_val = torch.utils.data.DataLoader(
         ds_val,
         batch_size = 1,
         shuffle = False,
-        num_workers = val_workers,
+        num_workers = args.workers,
         pin_memory = True,
         drop_last = False,
-        worker_init_fn = seed_worker if val_workers > 0 else None,
-        generator = g if val_workers > 0 else None,
+        worker_init_fn = seed_worker,
+        generator = g_val,
     )
 
     print(f"[init] train = {len(ds_train)}  val = {len(ds_val)}  workers = {args.workers}")
 
+    # Model selection
     if args.mode == "rgb":
-        model = CSRNet(load_imagenet = True).to(device)
+        model: nn.Module = CSRNet(load_imagenet = True)
     elif args.mode == "t":
-        model = CSRNet(load_imagenet = True).to(device)
+        model = CSRNet(load_imagenet = True)
     elif args.mode == "early":
-        model = CSRNetRGBT_Early(load_imagenet = True).to(device)
+        model = CSRNetRGBT_Early(load_imagenet = True)
     elif args.mode == "late":
-        model = CSRNetRGBT_Late(load_imagenet = True).to(device)
+        model = CSRNetRGBT_Late(load_imagenet = True)
+        _load_into(model.rgb_net, args.init_rgb_ckpt)
+        _load_into(model.t_net, args.init_t_ckpt)
     elif args.mode == "adaptive_late":
         try:
-            model = CSRNetRGBT_AdaptiveLate(load_imagenet = True).to(device)
+            model = CSRNetRGBT_AdaptiveLate(load_imagenet = True)
         except TypeError:
-            model = CSRNetRGBT_AdaptiveLate(load_weights = True).to(device)
+            model = CSRNetRGBT_AdaptiveLate(load_weights = True)
 
-        def _load_into(net: nn.Module, ckpt_path: str) -> None:
-            if not ckpt_path:
-                return
-            ckpt_path = os.path.expanduser(ckpt_path)
-            if not os.path.isfile(ckpt_path):
-                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-
-            ckpt = torch.load(ckpt_path, map_location = "cpu")
-            if isinstance(ckpt, dict):
-                for k in ("state_dict", "model", "net"):
-                    if k in ckpt and isinstance(ckpt[k], dict):
-                        ckpt = ckpt[k]
-                        break
-            if not isinstance(ckpt, dict):
-                raise ValueError(f"Unsupported checkpoint format: {type(ckpt)}")
-
-            sd = {kk.replace("module.", ""): vv for kk, vv in ckpt.items()}
-
-            for prefix in ("rgb_net.", "t_net."):
-                if any(k.startswith(prefix) for k in sd.keys()):
-                    sd_sub = {k[len(prefix):]: v for k, v in sd.items() if k.startswith(prefix)}
-                    if len(sd_sub) >= 10:
-                        sd = sd_sub
-                    break
-
-            res = net.load_state_dict(sd, strict = False)
-            print(f"[init] warm-start from {ckpt_path} (missing = {len(res.missing_keys)} unexpected = {len(res.unexpected_keys)})")
-
+        # Optional warm-start for adaptive experts.
         _load_into(model.rgb_net, args.init_rgb_ckpt)
         _load_into(model.t_net, args.init_t_ckpt)
     else:
         raise ValueError(f"Unknown mode: {args.mode}")
 
+    model = model.to(device)
+
     def loss_fn(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-        return F.mse_loss(pred, gt, reduction = "mean")
+        # Always compute loss in fp32 for stability (even under autocast).
+        return F.mse_loss(pred.float(), gt.float(), reduction = "mean")
 
-    scaler = GradScaler(enabled = bool(args.amp))
+    try:
+        scaler = GradScaler("cuda", enabled = bool(args.amp))
+    except TypeError:
+        scaler = GradScaler(enabled = bool(args.amp))
 
+    # Optimizer and LR schedule
     if args.mode == "adaptive_late":
         backbone_params = list(model.rgb_net.parameters()) + list(model.t_net.parameters())
         gate_module = getattr(model, "gate", None) or getattr(model, "gate_net", None)
         if gate_module is None:
             raise AttributeError("CSRNetRGBT_AdaptiveLate must expose a gate module as .gate or .gate_net")
-
+        gate_params = list(gate_module.parameters())
         params = [
             {"params": backbone_params, "lr": args.lr},
-            {"params": list(gate_module.parameters()), "lr": args.gate_lr},
+            {"params": gate_params, "lr": args.gate_lr},
         ]
     else:
         params = model.parameters()
@@ -354,7 +368,7 @@ def main() -> None:
         for batch in dl_train:
             step += 1
 
-            if args.mode in ["late", "adaptive_late", "early"]:
+            if args.mode in ["early", "late", "adaptive_late"]:
                 x_rgb, x_t, den_gt, _img_id, _meta = batch
                 x_rgb = x_rgb.to(device, non_blocking = True)
                 x_t = x_t.to(device, non_blocking = True)
@@ -367,6 +381,7 @@ def main() -> None:
                 else:
                     den_pred = model(x_rgb, x_t)
                     loss = loss_fn(den_pred, den_gt)
+
             else:
                 x, den_gt, _img_id, _meta = batch
                 x = x.to(device, non_blocking = True)
@@ -411,9 +426,7 @@ def main() -> None:
 
         train_loss = running / max(1, step)
 
-        amp_eval = bool(args.amp) and (not bool(args.val_deterministic))
-        metrics = eval_one_epoch(model, dl_val, device, amp = amp_eval)
-
+        metrics = eval_one_epoch(model, dl_val, device, amp = bool(args.amp))
         mae = metrics["mae"]
         rmse = metrics["rmse"]
         g1 = metrics["game1"]
@@ -424,7 +437,7 @@ def main() -> None:
         dt = time.time() - t0
         print(
             f"Epoch {ep:03d}: train_loss = {train_loss:.6f}  "
-            f"MAE/GAME0 = {mae:.3f}  RMSE = {rmse:.3f}  "
+            f"MAE = {mae:.3f}  RMSE = {rmse:.3f}  "
             f"GAME1 = {g1:.3f}  GAME2 = {g2:.3f}  GAME3 = {g3:.3f}  "
             f"lr = {lr_now:.2e}  time = {dt:.1f}s"
         )
