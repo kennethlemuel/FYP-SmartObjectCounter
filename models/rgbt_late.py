@@ -17,9 +17,10 @@ def _resize_density_sum_preserving(den, size_hw):
     if old_h == new_h and old_w == new_w:
         return den
 
+    in_sum = den.sum(dim = (2, 3), keepdim = True)
     den_rs = F.interpolate(den, size = (new_h, new_w), mode = "bilinear", align_corners = False)
-    den_rs = den_rs * (old_h * old_w) / float(new_h * new_w)
-    return den_rs
+    out_sum = den_rs.sum(dim = (2, 3), keepdim = True).clamp_min(1e-6)
+    return den_rs * (in_sum / out_sum)
 
 
 class CSRNetRGBT_Late(nn.Module):

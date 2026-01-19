@@ -33,7 +33,7 @@ export PYTHONPATH="${REPO}:${PYTHONPATH}"
 EPOCHS=100
 SEED=42
 
-python -u scripts/train_rgbt.py \
+python3 -u scripts/train_rgbt.py \
   --mode late \
   --data_root "${REPO}/data/RGBT-CC-CVPR2021" \
   --out_dir "${OUT_DIR}" \

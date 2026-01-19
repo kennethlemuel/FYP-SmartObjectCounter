@@ -1,12 +1,8 @@
 import os
 import json
 import random
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Sequence, Union
-
-import cv2
 import numpy as np
+import cv2
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -16,47 +12,6 @@ from scipy.io import loadmat
 
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
 _IMAGENET_STD = [0.229, 0.224, 0.225]
-
-
-def seed_worker(worker_id: int) -> None:
-    """Seed each DataLoader worker deterministically (NumPy + Python RNG)."""
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-
-
-def _to_chw_tensor_rgb(img_rgb_hwc: np.ndarray) -> torch.Tensor:
-    x = torch.from_numpy(np.ascontiguousarray(img_rgb_hwc))
-    if x.ndim != 3 or x.shape[2] != 3:
-        raise ValueError(f"Expected HWC RGB, got {tuple(x.shape)}")
-    x = x.permute(2, 0, 1).float().div(255.0)
-    return x.contiguous()
-
-
-def _to_chw_tensor_gray01(img_gray_hw: np.ndarray) -> torch.Tensor:
-    x = torch.from_numpy(np.ascontiguousarray(img_gray_hw))
-    if x.ndim != 2:
-        raise ValueError(f"Expected HW gray, got {tuple(x.shape)}")
-    x = x.unsqueeze(0).float().div(255.0)
-    return x.contiguous()
-
-
-def _normalize_imagenet(x: torch.Tensor) -> torch.Tensor:
-    if x.ndim != 3:
-        raise ValueError(f"Expected CHW, got {tuple(x.shape)}")
-
-    c = x.shape[0]
-    if c == 3:
-        mean = x.new_tensor(_IMAGENET_MEAN).view(3, 1, 1)
-        std = x.new_tensor(_IMAGENET_STD).view(3, 1, 1)
-    elif c == 1:
-        mean = x.new_tensor([0.485]).view(1, 1, 1)
-        std = x.new_tensor([0.229]).view(1, 1, 1)
-    else:
-        raise ValueError(f"Unsupported channel count: {c}")
-
-    return (x - mean) / std
-
 
 _tf_rgb = transforms.Compose([
     transforms.ToTensor(),
@@ -74,7 +29,7 @@ _tf_t1 = transforms.Compose([
 ])
 
 
-def _pick_existing(path_no_ext: str, exts: Sequence[str]) -> str | None:
+def _pick_existing(path_no_ext, exts):
     for e in exts:
         p = path_no_ext + e
         if os.path.exists(p):
@@ -82,13 +37,16 @@ def _pick_existing(path_no_ext: str, exts: Sequence[str]) -> str | None:
     return None
 
 
-def _den_to_tensor(den_hw: np.ndarray) -> torch.Tensor:
+def _den_to_tensor(den_hw):
     den_hw = np.ascontiguousarray(den_hw.astype(np.float32, copy = False))
     return torch.tensor(den_hw, dtype = torch.float32).unsqueeze(0).contiguous()
 
 
-def density_from_points(points_xy: np.ndarray, h: int, w: int, sigma: float = 15.0) -> np.ndarray:
-    """Create a count-preserving density map (sum == N when N > 0)."""
+def density_from_points(points_xy, h, w, sigma = 15.0):
+    """
+    points_xy: (N,2) in (x,y) coordinates in the SAME space as (h,w).
+    Returns a density map normalized so sum == N (when N > 0).
+    """
     dm = np.zeros((h, w), dtype = np.float32)
     if points_xy.size == 0:
         return dm
@@ -97,7 +55,7 @@ def density_from_points(points_xy: np.ndarray, h: int, w: int, sigma: float = 15
     ys = np.clip(points_xy[:, 1].astype(int), 0, h - 1)
 
     dm[ys, xs] = 1.0
-    dm = gaussian_filter(dm, sigma = float(sigma), mode = "constant")
+    dm = gaussian_filter(dm, sigma = sigma, mode = "constant")
 
     s = float(dm.sum())
     if s > 0:
@@ -105,18 +63,19 @@ def density_from_points(points_xy: np.ndarray, h: int, w: int, sigma: float = 15
     return dm
 
 
-def _load_points_json(p: str) -> np.ndarray:
+def _load_points_json(p):
     with open(p, "r") as f:
         data = json.load(f)
 
     for k in ["points", "keypoints", "annotations", "labels"]:
         if k in data and isinstance(data[k], list):
-            return np.array(data[k], dtype = np.float32).reshape(-1, 2)
+            pts = np.array(data[k], dtype = np.float32).reshape(-1, 2)
+            return pts
 
     return np.zeros((0, 2), dtype = np.float32)
 
 
-def _load_points_mat(p: str) -> np.ndarray:
+def _load_points_mat(p):
     m = loadmat(p)
 
     if "point" in m:
@@ -129,7 +88,7 @@ def _load_points_mat(p: str) -> np.ndarray:
     return np.zeros((0, 2), dtype = np.float32)
 
 
-def load_points(label_path_no_ext: str) -> np.ndarray:
+def load_points(label_path_no_ext):
     json_p = label_path_no_ext + ".json"
     mat_p = label_path_no_ext + ".mat"
 
@@ -141,29 +100,52 @@ def load_points(label_path_no_ext: str) -> np.ndarray:
     return np.zeros((0, 2), dtype = np.float32)
 
 
-def _to_t3(img_any: np.ndarray) -> np.ndarray:
+def seed_worker(worker_id: int) -> None:
+    """Deterministic DataLoader worker seeding."""
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
+def _to_chw_tensor_rgb(bgr_u8: np.ndarray) -> torch.Tensor:
+    """OpenCV BGR uint8 -> CHW float32 RGB tensor in [0, 1]."""
+    rgb = bgr_u8[:, :, ::-1].astype(np.float32) / 255.0
+    chw = np.transpose(rgb, (2, 0, 1))
+    return torch.from_numpy(chw)
+
+
+def _to_chw_tensor_gray01(gray_u8: np.ndarray) -> torch.Tensor:
+    """OpenCV gray uint8 -> 1xHxW float32 tensor in [0, 1]."""
+    g = gray_u8.astype(np.float32) / 255.0
+    return torch.from_numpy(g[None, ...])
+
+
+def _normalize_imagenet(rgb_chw_01: torch.Tensor) -> torch.Tensor:
+    """ImageNet normalization for 3-channel CHW tensors in [0, 1]."""
+    mean = torch.tensor([0.485, 0.456, 0.406], dtype=rgb_chw_01.dtype, device=rgb_chw_01.device)[:, None, None]
+    std = torch.tensor([0.229, 0.224, 0.225], dtype=rgb_chw_01.dtype, device=rgb_chw_01.device)[:, None, None]
+    return (rgb_chw_01 - mean) / std
+
+
+def _to_t3(img_any):
     if img_any.ndim == 2:
         g = img_any
     else:
         g = cv2.cvtColor(img_any, cv2.COLOR_BGR2GRAY)
-    return np.stack([g, g, g], axis = 2)
-
-
-# -----------------------------------------------------------------------------
-# Full-image datasets for validation / testing
-# -----------------------------------------------------------------------------
+    t3 = np.stack([g, g, g], axis = 2)
+    return t3
 
 
 class RGBTCC_RGBDataset(Dataset):
     def __init__(
         self,
-        root: str,
-        split: str,
-        img_size: tuple[int, int] = (768, 1024),
-        sigma: float = 15.0,
-        max_count: int | None = None,
-        return_pts: bool = False,
-        out_stride: int = 8,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
     ):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
@@ -183,10 +165,10 @@ class RGBTCC_RGBDataset(Dataset):
         self.h_out = self.h // self.out_stride
         self.w_out = self.w // self.out_stride
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.ids)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx):
         sid = self.ids[idx]
 
         rgb_p = _pick_existing(os.path.join(self.split_dir, f"{sid}_RGB"), [".jpg", ".png"])
@@ -239,13 +221,13 @@ class RGBTCC_RGBDataset(Dataset):
 class RGBTCC_TDataset(Dataset):
     def __init__(
         self,
-        root: str,
-        split: str,
-        img_size: tuple[int, int] = (768, 1024),
-        sigma: float = 15.0,
-        max_count: int | None = None,
-        return_pts: bool = False,
-        out_stride: int = 8,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
     ):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
@@ -265,10 +247,10 @@ class RGBTCC_TDataset(Dataset):
         self.h_out = self.h // self.out_stride
         self.w_out = self.w // self.out_stride
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.ids)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx):
         sid = self.ids[idx]
 
         t_p = _pick_existing(os.path.join(self.split_dir, f"{sid}_T"), [".jpg", ".png"])
@@ -321,13 +303,13 @@ class RGBTCC_TDataset(Dataset):
 class RGBTCC_PairedDataset(Dataset):
     def __init__(
         self,
-        root: str,
-        split: str,
-        img_size: tuple[int, int] = (768, 1024),
-        sigma: float = 15.0,
-        max_count: int | None = None,
-        return_pts: bool = False,
-        out_stride: int = 8,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
     ):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
@@ -347,10 +329,10 @@ class RGBTCC_PairedDataset(Dataset):
         self.h_out = self.h // self.out_stride
         self.w_out = self.w // self.out_stride
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.ids)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx):
         sid = self.ids[idx]
 
         rgb_p = _pick_existing(os.path.join(self.split_dir, f"{sid}_RGB"), [".jpg", ".png"])
@@ -409,17 +391,15 @@ class RGBTCC_PairedDataset(Dataset):
 
 
 class RGBTCC_EarlyFusionDataset(Dataset):
-    """Optional: 4-channel early-fusion input (RGB + 1ch thermal)."""
-
     def __init__(
         self,
-        root: str,
-        split: str,
-        img_size: tuple[int, int] = (768, 1024),
-        sigma: float = 15.0,
-        max_count: int | None = None,
-        return_pts: bool = False,
-        out_stride: int = 8,
+        root,
+        split,
+        img_size = (768, 1024),
+        sigma = 15.0,
+        max_count = None,
+        return_pts = False,
+        out_stride = 8,
     ):
         assert split in ["train", "val", "test"]
         self.split_dir = os.path.join(root, split)
@@ -439,10 +419,10 @@ class RGBTCC_EarlyFusionDataset(Dataset):
         self.h_out = self.h // self.out_stride
         self.w_out = self.w // self.out_stride
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.ids)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx):
         sid = self.ids[idx]
 
         rgb_p = _pick_existing(os.path.join(self.split_dir, f"{sid}_RGB"), [".jpg", ".png"])
@@ -501,151 +481,126 @@ class RGBTCC_EarlyFusionDataset(Dataset):
         return x4, den_t, f"{sid}.jpg", gt_count
 
 
-# -----------------------------------------------------------------------------
-# Base list builder for crop-based training
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------------
+# Backwards-compatible API (for older scripts that import RGBTCCDset / RGBTCCBase)
+# -------------------------------------------------------------------------
+from dataclasses import dataclass
+from typing import List, Sequence, Union
 
 
-@dataclass(frozen = True)
+@dataclass(frozen=True)
 class RGBTCCBase:
     rgb_path: str
     t_path: str
-    gt_path: str  # path WITHOUT extension
+    gt_path: str
     image_id: str
 
 
-def build_splits_rgbt_cc(data_root: str, split_root: str = ""):
-    """Build (train, val) base lists.
+def _first_existing_dir(base, candidates):
+    from pathlib import Path
+    base = Path(base)
+    for c in candidates:
+        p = base / c
+        if p.exists():
+            return p
+    return None
 
-    Supports BOTH layouts:
 
-    (1) Structured:
-        <data_root>/<split>/RGB/<id>.(jpg/png/...)
-        <data_root>/<split>/T/<id>.(jpg/png/...)
-        <data_root>/<split>/GT/<id>.json   (or .mat)
+def _match_by_stem(dir_path, stem, exts):
+    from pathlib import Path
+    d = Path(dir_path)
+    for e in exts:
+        p = d / f"{stem}{e}"
+        if p.exists():
+            return p
+    matches = sorted(d.glob(f"{stem}.*"))
+    return matches[0] if matches else None
 
-    (2) Flat:
-        <data_root>/<split>/<id>_RGB.(jpg/png/...)
-        <data_root>/<split>/<id>_T.(jpg/png/...)
-        <data_root>/<split>/<id>_GT.json   (or .mat)
-    """
-    data_root_p = Path(data_root)
-    split_root_p = Path(split_root) if split_root else None
 
-    rgb_exts = [".jpg", ".jpeg", ".png", ".bmp"]
-    gt_exts = [".json", ".mat"]
-
-    def _read_id_list(list_path: Path):
-        ids = []
-        for line in list_path.read_text().splitlines():
+def _read_id_list(txt_path):
+    ids = []
+    with open(txt_path, "r") as f:
+        for line in f:
             s = line.strip()
             if not s:
                 continue
-            stem = Path(s).stem
-            if stem.endswith("_RGB"):
-                stem = stem[:-4]
-            elif stem.endswith("_T"):
-                stem = stem[:-2]
-            elif stem.endswith("_GT"):
-                stem = stem[:-3]
-            ids.append(stem)
-        return ids
+            ids.append(s.rsplit(".", 1)[0])
+    return ids
 
-    def _first_existing_dir(parent: Path, names: Sequence[str]):
-        for n in names:
-            p = parent / n
-            if p.is_dir():
-                return p
-        return None
 
-    def _match_by_stem(dir_path: Path, stem: str, exts: Sequence[str]):
-        for e in exts:
-            p = dir_path / f"{stem}{e}"
-            if p.exists():
-                return p
-        matches = sorted(dir_path.glob(f"{stem}.*"))
-        return matches[0] if matches else None
+def build_splits_rgbt_cc(data_root: str, split_root: str = ""):
+    # Returns base_train, base_val as List[RGBTCCBase].
+    from pathlib import Path
 
-    def _infer_ids_from_flat(split_dir: Path):
-        ids = set()
-        for p in split_dir.iterdir():
-            if not p.is_file():
-                continue
-            n = p.name
-            if "_RGB." in n:
-                ids.add(n.split("_RGB.", 1)[0])
-        if len(ids) == 0:
-            for p in split_dir.iterdir():
-                if not p.is_file():
-                    continue
-                n = p.name
-                if "_T." in n:
-                    ids.add(n.split("_T.", 1)[0])
-                elif "_GT." in n:
-                    ids.add(n.split("_GT.", 1)[0])
-        return sorted(ids)
+    data_root_p = Path(data_root)
+    split_root_p = Path(split_root) if split_root else None
 
-    def build_one(split_name: str):
+    def build_one(split_name: str) -> List[RGBTCCBase]:
         split_dir = data_root_p / split_name
         if not split_dir.exists():
             raise FileNotFoundError(f"Split folder not found: {split_dir}")
 
+        rgb_dir = _first_existing_dir(split_dir, ["RGB", "rgb", "images_rgb", "Images/RGB", "images/RGB"])
+        t_dir = _first_existing_dir(split_dir, ["T", "t", "thermal", "Thermal", "images_t", "Images/T", "images/T"])
+        gt_dir = _first_existing_dir(split_dir, ["GT", "gt", "annotations", "ann", "label", "Labels", "Images/GT", "images/GT"])
+
+        flat_layout = False
+        if rgb_dir is None or t_dir is None or gt_dir is None:
+            # Flat layout: files live directly under the split directory with names like
+            #   <id>_RGB.jpg, <id>_T.jpg, <id>_GT.json
+            flat_layout = True
+            rgb_dir = split_dir
+            t_dir = split_dir
+            gt_dir = split_dir
+
         id_list = None
         if split_root_p is not None:
-            list_path = split_root_p / f"{split_name}.txt"
-            if list_path.exists():
-                id_list = _read_id_list(list_path)
+            cand = [f"{split_name}.txt", f"{split_name}_list.txt", f"{split_name}list.txt"]
+            for c in cand:
+                p = split_root_p / c
+                if p.exists():
+                    id_list = _read_id_list(p)
+                    break
 
-        rgb_dir = _first_existing_dir(split_dir, ["RGB", "rgb", "visible", "vis", "Vis"])
-        t_dir = _first_existing_dir(split_dir, ["T", "t", "thermal", "Thermal", "ir", "IR"])
-        gt_dir = _first_existing_dir(split_dir, ["GT", "gt", "labels", "label", "ann", "annotations", "Annotation"])
-
-        is_structured = (rgb_dir is not None) and (t_dir is not None) and (gt_dir is not None)
+        img_exts = [".jpg", ".jpeg", ".png", ".bmp"]
+        gt_exts = [".json", ".npy", ".npz", ".mat"]
 
         if id_list is None:
-            if is_structured:
-                stems = []
-                for p in rgb_dir.iterdir():
-                    if p.is_file() and p.suffix.lower() in rgb_exts:
-                        stems.append(p.stem)
-                id_list = sorted(stems)
+            rgb_paths = []
+            if flat_layout:
+                # Only use RGB images as anchors (avoid T / GT files).
+                for e in img_exts:
+                    rgb_paths.extend(split_dir.glob(f"*_RGB{e}"))
             else:
-                id_list = _infer_ids_from_flat(split_dir)
+                for e in img_exts:
+                    rgb_paths.extend(rgb_dir.glob(f"*{e}"))
+
+            stems = []
+            for p in sorted(rgb_paths):
+                st = p.stem
+                if st.endswith("_RGB"):
+                    st = st[:-4]
+                stems.append(st)
+            stems = sorted(set(stems))
+        else:
+            stems = id_list
 
         base = []
-        missing = 0
-
-        for sid in id_list:
-            if is_structured:
-                rgb_p = _match_by_stem(rgb_dir, sid, exts = rgb_exts)
-                t_p = _match_by_stem(t_dir, sid, exts = rgb_exts)
-                gt_p = _match_by_stem(gt_dir, sid, exts = gt_exts)
-                gt_no_ext = str(gt_dir / sid)
+        for stem in stems:
+            if flat_layout:
+                rgb_p = _match_by_stem(rgb_dir, f"{stem}_RGB", img_exts) or _match_by_stem(rgb_dir, stem, img_exts)
+                t_p = _match_by_stem(t_dir, f"{stem}_T", img_exts) or _match_by_stem(t_dir, stem, img_exts)
+                gt_p = _match_by_stem(gt_dir, f"{stem}_GT", gt_exts) or _match_by_stem(gt_dir, stem, gt_exts)
             else:
-                rgb_p = _match_by_stem(split_dir, f"{sid}_RGB", exts = rgb_exts)
-                t_p = _match_by_stem(split_dir, f"{sid}_T", exts = rgb_exts)
-                gt_p = _match_by_stem(split_dir, f"{sid}_GT", exts = gt_exts)
-                gt_no_ext = str(split_dir / f"{sid}_GT")
-
-            if (rgb_p is None) or (t_p is None) or (gt_p is None):
-                missing += 1
+                rgb_p = _match_by_stem(rgb_dir, stem, img_exts) or _match_by_stem(rgb_dir, f"{stem}_RGB", img_exts)
+                t_p = _match_by_stem(t_dir, stem, img_exts) or _match_by_stem(t_dir, f"{stem}_T", img_exts)
+                gt_p = _match_by_stem(gt_dir, stem, gt_exts) or _match_by_stem(gt_dir, f"{stem}_GT", gt_exts)
+            if rgb_p is None or t_p is None or gt_p is None:
                 continue
-
-            base.append(
-                RGBTCCBase(
-                    rgb_path = str(rgb_p),
-                    t_path = str(t_p),
-                    gt_path = gt_no_ext,
-                    image_id = sid,
-                )
-            )
+            base.append(RGBTCCBase(str(rgb_p), str(t_p), str(gt_p), stem))
 
         if len(base) == 0:
             raise RuntimeError(f"No valid (RGB,T,GT) triplets found for split='{split_name}' under {split_dir}")
-
-        if missing > 0:
-            print(f"[RGBT-CC] Warning: {missing} samples skipped in split='{split_name}' due to missing RGB/T/GT files.")
-
         return base
 
     base_train = build_one("train")
@@ -656,20 +611,16 @@ def build_splits_rgbt_cc(data_root: str, split_root: str = ""):
     return base_train, base_val
 
 
-# -----------------------------------------------------------------------------
-# Crop-based paired training dataset (CSRNet-style)
-# -----------------------------------------------------------------------------
-
-
-def _pad_to_size(img: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
+def _pad_to_min_size(img, min_h: int, min_w: int):
+    import numpy as np
     h, w = img.shape[:2]
-    pad_h = max(0, target_h - h)
-    pad_w = max(0, target_w - w)
+    pad_h = max(0, min_h - h)
+    pad_w = max(0, min_w - w)
     if pad_h == 0 and pad_w == 0:
         return img
     if img.ndim == 2:
-        return np.pad(img, ((0, pad_h), (0, pad_w)), mode = "constant", constant_values = 0)
-    return np.pad(img, ((0, pad_h), (0, pad_w), (0, 0)), mode = "constant", constant_values = 0)
+        return np.pad(img, ((0, pad_h), (0, pad_w)), mode="constant", constant_values=0)
+    return np.pad(img, ((0, pad_h), (0, pad_w), (0, 0)), mode="constant", constant_values=0)
 
 
 def _paired_random_crop_params(h: int, w: int, crop_h: int, crop_w: int, deterministic: bool):
@@ -686,33 +637,17 @@ def _paired_random_crop_params(h: int, w: int, crop_h: int, crop_w: int, determi
         left = (w - crop_w) // 2
     else:
         left = random.randint(0, w - crop_w)
-
     return top, left
 
 
-def _apply_crop_hflip_rgb_t_pts(
-    rgb_np: np.ndarray,
-    t_np: np.ndarray,
-    pts_xy: np.ndarray,
-    crop_h: int,
-    crop_w: int,
-    deterministic: bool,
-    is_train: bool,
-):
-    """Paired crop + (optional) hflip, robust to RGB/T size mismatches."""
+def _apply_crop_hflip_rgb_t_pts(rgb_np, t_np, pts_xy, crop_h: int, crop_w: int, deterministic: bool, is_train: bool):
+    import numpy as np
 
-    rgb_np = _pad_to_size(rgb_np, crop_h, crop_w)
-    t_np = _pad_to_size(t_np, crop_h, crop_w)
+    rgb_np = _pad_to_min_size(rgb_np, crop_h, crop_w)
+    t_np = _pad_to_min_size(t_np, crop_h, crop_w)
 
-    rh, rw = rgb_np.shape[:2]
-    th, tw = t_np.shape[:2]
-    H = max(rh, th)
-    W = max(rw, tw)
-
-    rgb_np = _pad_to_size(rgb_np, H, W)
-    t_np = _pad_to_size(t_np, H, W)
-
-    top, left = _paired_random_crop_params(H, W, crop_h, crop_w, deterministic)
+    h, w = rgb_np.shape[:2]
+    top, left = _paired_random_crop_params(h, w, crop_h, crop_w, deterministic)
 
     rgb_c = rgb_np[top:top + crop_h, left:left + crop_w]
     t_c = t_np[top:top + crop_h, left:left + crop_w]
@@ -733,11 +668,7 @@ def _apply_crop_hflip_rgb_t_pts(
 
     if do_flip:
         rgb_c = np.ascontiguousarray(rgb_c[:, ::-1, :])
-        if t_c.ndim == 2:
-            t_c = np.ascontiguousarray(t_c[:, ::-1])
-        else:
-            t_c = np.ascontiguousarray(t_c[:, ::-1, :])
-
+        t_c = np.ascontiguousarray(t_c[:, ::-1] if t_c.ndim == 2 else t_c[:, ::-1, :])
         if pts.size > 0:
             pts[:, 0] = (crop_w - 1) - pts[:, 0]
 
@@ -745,8 +676,7 @@ def _apply_crop_hflip_rgb_t_pts(
 
 
 class RGBTCCDset(torch.utils.data.Dataset):
-    """Paired RGB-T crops returning (rgb_t, t_t, den_t, image_id, meta)."""
-
+    # Paired RGB-T dataset returning density maps (CSRNet-style).
     def __init__(
         self,
         base: Sequence[Union[RGBTCCBase, dict]],
@@ -764,10 +694,12 @@ class RGBTCCDset(torch.utils.data.Dataset):
         self.is_train = bool(is_train)
         self.deterministic = bool(deterministic)
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.base)
 
     def __getitem__(self, idx: int):
+        import numpy as np
+        from pathlib import Path
         from PIL import Image
 
         item = self.base[idx]
@@ -790,16 +722,11 @@ class RGBTCCDset(torch.utils.data.Dataset):
 
         pts = load_points(gt_path)
         if pts is None:
-            pts = np.zeros((0, 2), dtype = np.float32)
+            pts = np.zeros((0, 2), dtype=np.float32)
 
         rgb_np, t_np, pts_crop = _apply_crop_hflip_rgb_t_pts(
-            rgb_np,
-            t_np,
-            pts_xy = pts,
-            crop_h = self.crop_h,
-            crop_w = self.crop_w,
-            deterministic = self.deterministic,
-            is_train = self.is_train,
+            rgb_np, t_np, pts_xy=pts, crop_h=self.crop_h, crop_w=self.crop_w,
+            deterministic=self.deterministic, is_train=self.is_train
         )
 
         rgb_t = _normalize_imagenet(_to_chw_tensor_rgb(rgb_np))
@@ -812,12 +739,13 @@ class RGBTCCDset(torch.utils.data.Dataset):
         out_w = self.crop_w // self.down
 
         if pts_crop.size == 0:
-            den = np.zeros((out_h, out_w), dtype = np.float32)
+            den = np.zeros((out_h, out_w), dtype=np.float32)
         else:
             pts_ds = pts_crop / float(self.down)
-            den = density_from_points(pts_ds, out_h, out_w, sigma = max(1.0, self.sigma / float(self.down)))
+            # Use the local CSRNet-style density builder (count-preserving normalization)
+            den = density_from_points(pts_ds, out_h, out_w, sigma=self.sigma / float(self.down))
 
-        den_t = torch.from_numpy(den).unsqueeze(0).float().contiguous()
+        den_t = torch.from_numpy(den).unsqueeze(0).float()
 
         meta = {
             "rgb_path": rgb_path,
@@ -831,18 +759,10 @@ class RGBTCCDset(torch.utils.data.Dataset):
 
 
 class RGBTCC_RGBDset(torch.utils.data.Dataset):
-    def __init__(
-        self,
-        base,
-        crop_size: int = 224,
-        sigma: float = 15.0,
-        down: int = 8,
-        is_train: bool = True,
-        deterministic: bool = False,
-    ):
-        self.paired = RGBTCCDset(base, crop_size = crop_size, sigma = sigma, down = down, is_train = is_train, deterministic = deterministic)
+    def __init__(self, base, crop_size: int = 224, sigma: float = 15.0, down: int = 8, is_train: bool = True, deterministic: bool = False):
+        self.paired = RGBTCCDset(base, crop_size=crop_size, sigma=sigma, down=down, is_train=is_train, deterministic=deterministic)
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.paired)
 
     def __getitem__(self, idx: int):
@@ -851,18 +771,10 @@ class RGBTCC_RGBDset(torch.utils.data.Dataset):
 
 
 class RGBTCC_TDset(torch.utils.data.Dataset):
-    def __init__(
-        self,
-        base,
-        crop_size: int = 224,
-        sigma: float = 15.0,
-        down: int = 8,
-        is_train: bool = True,
-        deterministic: bool = False,
-    ):
-        self.paired = RGBTCCDset(base, crop_size = crop_size, sigma = sigma, down = down, is_train = is_train, deterministic = deterministic)
+    def __init__(self, base, crop_size: int = 224, sigma: float = 15.0, down: int = 8, is_train: bool = True, deterministic: bool = False):
+        self.paired = RGBTCCDset(base, crop_size=crop_size, sigma=sigma, down=down, is_train=is_train, deterministic=deterministic)
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.paired)
 
     def __getitem__(self, idx: int):

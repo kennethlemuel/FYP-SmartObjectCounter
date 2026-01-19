@@ -33,7 +33,7 @@ export PYTHONPATH="${REPO}:${PYTHONPATH}"
 EPOCHS=100
 SEED=42
 
-python -u scripts/train_rgbt.py \
+python3 -u scripts/train_rgbt.py \
   --mode adaptive_late \
   --data_root "${REPO}/data/RGBT-CC-CVPR2021" \
   --out_dir "${OUT_DIR}" \
@@ -42,10 +42,12 @@ python -u scripts/train_rgbt.py \
   --batch_size 1 \
   --workers 4 \
   --lr 1e-5 \
+  --gate_lr 1e-5 \
   --weight_decay 1e-4 \
   --crop_size 224 \
   --sigma 15.0 \
   --down 8 \
   --amp \
   --grad_accum 1 \
-  --clip_grad 1.0
+  --clip_grad 1.0 \
+  --freeze_backbones_epochs 5
