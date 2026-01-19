@@ -7,7 +7,6 @@ class CSRNetRGBT_Early(nn.Module):
         super().__init__()
         vgg = vgg16(weights = VGG16_Weights.IMAGENET1K_V1 if load_imagenet else None)
         feats = list(vgg.features.children())
-
         #replacing the first conv to accept 4 channels
         conv1 = feats[0]
         new_conv1 = nn.Conv2d(4, 64, kernel_size = 3, padding = 1, bias = True)

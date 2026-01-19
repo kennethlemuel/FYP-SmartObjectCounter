@@ -11,14 +11,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import GradScaler
-
 from datasets.rgbt_cc import (
     RGBTCCDset,
     RGBTCC_RGBDset,
     RGBTCC_TDset,
+    RGBTCC_RGBDataset,
+    RGBTCC_TDataset,
+    RGBTCC_PairedDataset,
     build_splits_rgbt_cc,
-    seed_worker,
 )
+
 from models.csrnet import CSRNet
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
@@ -43,6 +45,10 @@ def set_seed(seed: int, deterministic: bool = True) -> None:
         except Exception:
             pass
 
+def seed_worker(worker_id: int) -> None:
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 def _set_requires_grad(module: nn.Module, req: bool) -> None:
     for p in module.parameters():
@@ -222,8 +228,15 @@ def main() -> None:
 
     # Build base splits (paths)
     base_train, base_val = build_splits_rgbt_cc(args.data_root)
+    data_root_p = Path(args.data_root)
+    val_split = "val" if (data_root_p / "val").exists() else "test"
 
-    # Dataset selection
+        # Build base splits (paths)
+    base_train, base_val = build_splits_rgbt_cc(args.data_root)
+
+    # -----------------------------
+    # Train: crop-based (fair protocol)
+    # -----------------------------
     is_train_det = bool(args.deterministic)
 
     if args.mode == "rgb":
@@ -235,14 +248,6 @@ def main() -> None:
             is_train = True,
             deterministic = is_train_det,
         )
-        ds_val = RGBTCC_RGBDset(
-            base_val,
-            crop_size = args.crop_size,
-            sigma = args.sigma,
-            down = args.down,
-            is_train = False,
-            deterministic = bool(args.val_deterministic) or is_train_det,
-        )
     elif args.mode == "t":
         ds_train = RGBTCC_TDset(
             base_train,
@@ -252,34 +257,8 @@ def main() -> None:
             is_train = True,
             deterministic = is_train_det,
         )
-        ds_val = RGBTCC_TDset(
-            base_val,
-            crop_size = args.crop_size,
-            sigma = args.sigma,
-            down = args.down,
-            is_train = False,
-            deterministic = bool(args.val_deterministic) or is_train_det,
-        )
-    elif args.mode == "early":
-        # Early fusion uses paired dataset but returns rgbt_4ch and density
-        ds_train = RGBTCCDset(
-            base_train,
-            crop_size = args.crop_size,
-            sigma = args.sigma,
-            down = args.down,
-            is_train = True,
-            deterministic = is_train_det,
-        )
-        ds_val = RGBTCCDset(
-            base_val,
-            crop_size = args.crop_size,
-            sigma = args.sigma,
-            down = args.down,
-            is_train = False,
-            deterministic = bool(args.val_deterministic) or is_train_det,
-        )
     else:
-        # late / adaptive_late: paired
+        # early / late / adaptive_late train on paired crops
         ds_train = RGBTCCDset(
             base_train,
             crop_size = args.crop_size,
@@ -287,16 +266,42 @@ def main() -> None:
             down = args.down,
             is_train = True,
             deterministic = is_train_det,
-        )
-        ds_val = RGBTCCDset(
-            base_val,
-            crop_size = args.crop_size,
-            sigma = args.sigma,
-            down = args.down,
-            is_train = False,
-            deterministic = bool(args.val_deterministic) or is_train_det,
         )
 
+    # -----------------------------
+    # Val: full-image (deterministic)
+    # -----------------------------
+    data_root_p = Path(args.data_root)
+    val_split = "val" if (data_root_p / "val").exists() else "test"
+
+    if args.mode == "rgb":
+        ds_val = RGBTCC_RGBDataset(
+            root = args.data_root,
+            split = val_split,
+            img_size = (768, 1024),
+            sigma = args.sigma,
+            return_pts = False,
+            out_stride = args.down,
+        )
+    elif args.mode == "t":
+        ds_val = RGBTCC_TDataset(
+            root = args.data_root,
+            split = val_split,
+            img_size = (768, 1024),
+            sigma = args.sigma,
+            return_pts = False,
+            out_stride = args.down,
+        )
+    else:
+        ds_val = RGBTCC_PairedDataset(
+            root = args.data_root,
+            split = val_split,
+            img_size = (768, 1024),
+            sigma = args.sigma,
+            return_pts = False,
+            out_stride = args.down,
+        )
+ 
     g = torch.Generator()
     g.manual_seed(args.seed)
 

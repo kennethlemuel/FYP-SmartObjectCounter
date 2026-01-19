@@ -63,16 +63,53 @@ def density_from_points(points_xy, h, w, sigma = 15.0):
     return dm
 
 
-def _load_points_json(p):
-    with open(p, "r") as f:
-        data = json.load(f)
+def _load_points_json(json_path: str) -> np.ndarray:
+    import json
+    try:
+        with open(json_path, "r") as f:
+            obj = json.load(f)
+    except Exception:
+        return np.zeros((0, 2), dtype = np.float32)
 
-    for k in ["points", "keypoints", "annotations", "labels"]:
-        if k in data and isinstance(data[k], list):
-            pts = np.array(data[k], dtype = np.float32).reshape(-1, 2)
-            return pts
+    cand = None
 
-    return np.zeros((0, 2), dtype = np.float32)
+    # Case 1: file is directly a list of points
+    if isinstance(obj, list):
+        cand = obj
+
+    # Case 2: dict with common keys
+    if cand is None and isinstance(obj, dict):
+        for k in ("points", "point", "annPoints", "annotations", "labels", "locations"):
+            if k in obj:
+                cand = obj[k]
+                break
+
+        # Shallow fallback: look one level down
+        if cand is None:
+            for v in obj.values():
+                if isinstance(v, dict):
+                    for kk in ("points", "point", "annPoints"):
+                        if kk in v:
+                            cand = v[kk]
+                            break
+                elif isinstance(v, list):
+                    # looks like Nx2 or Nx>=2
+                    if len(v) > 0 and isinstance(v[0], (list, tuple)) and len(v[0]) >= 2:
+                        cand = v
+                if cand is not None:
+                    break
+
+    if cand is None:
+        return np.zeros((0, 2), dtype = np.float32)
+
+    arr = np.asarray(cand, dtype = np.float32)
+    if arr.ndim == 1 and arr.size >= 2:
+        arr = arr.reshape(1, -1)
+    if arr.ndim != 2 or arr.shape[1] < 2:
+        return np.zeros((0, 2), dtype = np.float32)
+
+    return arr[:, :2]
+
 
 
 def _load_points_mat(p):
@@ -88,16 +125,28 @@ def _load_points_mat(p):
     return np.zeros((0, 2), dtype = np.float32)
 
 
-def load_points(label_path_no_ext):
-    json_p = label_path_no_ext + ".json"
-    mat_p = label_path_no_ext + ".mat"
+def load_points(label_path: str) -> np.ndarray:
+    # If caller already provided an existing file path with extension, load it directly.
+    if isinstance(label_path, str):
+        if label_path.endswith(".json") and os.path.isfile(label_path):
+            return _load_points_json(label_path)
+        if label_path.endswith(".mat") and os.path.isfile(label_path):
+            return _load_points_mat(label_path)
 
-    if os.path.exists(json_p):
+    # Otherwise treat it as "no extension" (or strip any extension safely)
+    base, ext = os.path.splitext(label_path)
+    label_no_ext = base if ext in (".json", ".mat") else label_path
+
+    json_p = label_no_ext + ".json"
+    mat_p = label_no_ext + ".mat"
+
+    if os.path.isfile(json_p):
         return _load_points_json(json_p)
-    if os.path.exists(mat_p):
+    if os.path.isfile(mat_p):
         return _load_points_mat(mat_p)
 
     return np.zeros((0, 2), dtype = np.float32)
+
 
 
 def seed_worker(worker_id: int) -> None:
