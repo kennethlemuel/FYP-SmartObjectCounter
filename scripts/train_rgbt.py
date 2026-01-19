@@ -15,11 +15,17 @@ from datasets.rgbt_cc import (
     RGBTCCDset,
     RGBTCC_RGBDset,
     RGBTCC_TDset,
-    RGBTCC_RGBDataset,
-    RGBTCC_TDataset,
-    RGBTCC_PairedDataset,
     build_splits_rgbt_cc,
 )
+
+# Full-image validation datasets (must exist in datasets/rgbt_cc.py after our patch)
+try:
+    from datasets.rgbt_cc import RGBTCC_RGBDataset, RGBTCC_TDataset, RGBTCC_PairedDataset
+except Exception:
+    RGBTCC_RGBDataset = None
+    RGBTCC_TDataset = None
+    RGBTCC_PairedDataset = None
+
 
 from models.csrnet import CSRNet
 from models.rgbt_early import CSRNetRGBT_Early
@@ -228,11 +234,15 @@ def main() -> None:
 
     # Build base splits (paths)
     base_train, base_val = build_splits_rgbt_cc(args.data_root)
-    data_root_p = Path(args.data_root)
-    val_split = "val" if (data_root_p / "val").exists() else "test"
 
-        # Build base splits (paths)
-    base_train, base_val = build_splits_rgbt_cc(args.data_root)
+    # Require patched full-image validation datasets for fair metrics
+    if RGBTCC_PairedDataset is None or RGBTCC_RGBDataset is None or RGBTCC_TDataset is None:
+        raise RuntimeError(
+            "Missing full-image validation datasets. "
+            "Update datasets/rgbt_cc.py to the patched version that defines "
+            "RGBTCC_RGBDataset, RGBTCC_TDataset, RGBTCC_PairedDataset."
+        )
+
 
     # -----------------------------
     # Train: crop-based (fair protocol)
@@ -275,32 +285,11 @@ def main() -> None:
     val_split = "val" if (data_root_p / "val").exists() else "test"
 
     if args.mode == "rgb":
-        ds_val = RGBTCC_RGBDataset(
-            root = args.data_root,
-            split = val_split,
-            img_size = (768, 1024),
-            sigma = args.sigma,
-            return_pts = False,
-            out_stride = args.down,
-        )
+        ds_val = RGBTCC_RGBDataset(str(data_root_p), split=val_split, img_size=(768, 1024))
     elif args.mode == "t":
-        ds_val = RGBTCC_TDataset(
-            root = args.data_root,
-            split = val_split,
-            img_size = (768, 1024),
-            sigma = args.sigma,
-            return_pts = False,
-            out_stride = args.down,
-        )
+        ds_val = RGBTCC_TDataset(str(data_root_p), split=val_split, img_size=(768, 1024))
     else:
-        ds_val = RGBTCC_PairedDataset(
-            root = args.data_root,
-            split = val_split,
-            img_size = (768, 1024),
-            sigma = args.sigma,
-            return_pts = False,
-            out_stride = args.down,
-        )
+        ds_val = RGBTCC_PairedDataset(str(data_root_p), split=val_split, img_size=(768, 1024))
  
     g = torch.Generator()
     g.manual_seed(args.seed)
