@@ -11,22 +11,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import GradScaler
+
 from datasets.rgbt_cc import (
     RGBTCCDset,
     RGBTCC_RGBDset,
     RGBTCC_TDset,
     build_splits_rgbt_cc,
+    seed_worker,
 )
-
-# Full-image validation datasets (must exist in datasets/rgbt_cc.py after our patch)
-try:
-    from datasets.rgbt_cc import RGBTCC_RGBDataset, RGBTCC_TDataset, RGBTCC_PairedDataset
-except Exception:
-    RGBTCC_RGBDataset = None
-    RGBTCC_TDataset = None
-    RGBTCC_PairedDataset = None
-
-
 from models.csrnet import CSRNet
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
@@ -51,10 +43,6 @@ def set_seed(seed: int, deterministic: bool = True) -> None:
         except Exception:
             pass
 
-def seed_worker(worker_id: int) -> None:
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
 
 def _set_requires_grad(module: nn.Module, req: bool) -> None:
     for p in module.parameters():
@@ -146,12 +134,8 @@ def eval_one_epoch(
             else:
                 den_pred = model(x)
 
-        # Eval stability: enforce finite, non-negative densities before summing.
-        den_pred = torch.nan_to_num(den_pred.float(), nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
-        den_gt = torch.nan_to_num(den_gt.float(), nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
-
-        cnt_pred = den_pred.double().sum(dim = (2, 3)).cpu().numpy()
-        cnt_gt = den_gt.double().sum(dim = (2, 3)).cpu().numpy()
+        cnt_pred = _count_from_density(den_pred).cpu().numpy()
+        cnt_gt = _count_from_density(den_gt).cpu().numpy()
 
         err = np.abs(cnt_pred - cnt_gt)
         mae += float(err.sum())
@@ -202,13 +186,13 @@ def main() -> None:
     ap.add_argument("--max_lr", type = float, default = 1e-5)
 
     # Adaptive-late gate LR (separate param group)
-    ap.add_argument("--gate_lr", type = float, default = None)
-    ap.add_argument("--max_gate_lr", type = float, default = None)
+    ap.add_argument("--gate_lr", type = float, default = 1e-4)
+    ap.add_argument("--max_gate_lr", type = float, default = 1e-4)
     ap.add_argument("--init_rgb_ckpt", type = str, default = "", help = "Optional: path to a pretrained RGB baseline checkpoint to warm-start adaptive_late.rgb_net")
     ap.add_argument("--init_t_ckpt", type = str, default = "", help = "Optional: path to a pretrained T baseline checkpoint to warm-start adaptive_late.t_net")
 
     ap.add_argument("--freeze_backbones_epochs", type = int, default = 0)
-    ap.add_argument("--amp", action = "store_true")
+    ap.add_argument("--amp", action = "store_true", help = "Enable AMP for training forward/backward (evaluation runs in fp32)")
     ap.add_argument("--grad_accum", type = int, default = 1)
     ap.add_argument("--clip_grad", type = float, default = 0.0)
 
@@ -217,12 +201,6 @@ def main() -> None:
     ap.add_argument("--down", type = int, default = 8)
 
     args = ap.parse_args()
-
-    # If you don’t specify separate gate learning rates, default them to the backbone LR.
-    if args.gate_lr is None:
-        args.gate_lr = args.lr
-    if args.max_gate_lr is None:
-        args.max_gate_lr = args.max_lr
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents = True, exist_ok = True)
@@ -235,18 +213,7 @@ def main() -> None:
     # Build base splits (paths)
     base_train, base_val = build_splits_rgbt_cc(args.data_root)
 
-    # Require patched full-image validation datasets for fair metrics
-    if RGBTCC_PairedDataset is None or RGBTCC_RGBDataset is None or RGBTCC_TDataset is None:
-        raise RuntimeError(
-            "Missing full-image validation datasets. "
-            "Update datasets/rgbt_cc.py to the patched version that defines "
-            "RGBTCC_RGBDataset, RGBTCC_TDataset, RGBTCC_PairedDataset."
-        )
-
-
-    # -----------------------------
-    # Train: crop-based (fair protocol)
-    # -----------------------------
+    # Dataset selection
     is_train_det = bool(args.deterministic)
 
     if args.mode == "rgb":
@@ -258,6 +225,14 @@ def main() -> None:
             is_train = True,
             deterministic = is_train_det,
         )
+        ds_val = RGBTCC_RGBDset(
+            base_val,
+            crop_size = args.crop_size,
+            sigma = args.sigma,
+            down = args.down,
+            is_train = False,
+            deterministic = bool(args.val_deterministic) or is_train_det,
+        )
     elif args.mode == "t":
         ds_train = RGBTCC_TDset(
             base_train,
@@ -267,8 +242,16 @@ def main() -> None:
             is_train = True,
             deterministic = is_train_det,
         )
-    else:
-        # early / late / adaptive_late train on paired crops
+        ds_val = RGBTCC_TDset(
+            base_val,
+            crop_size = args.crop_size,
+            sigma = args.sigma,
+            down = args.down,
+            is_train = False,
+            deterministic = bool(args.val_deterministic) or is_train_det,
+        )
+    elif args.mode == "early":
+        # Early fusion uses paired dataset but returns rgbt_4ch and density
         ds_train = RGBTCCDset(
             base_train,
             crop_size = args.crop_size,
@@ -277,20 +260,33 @@ def main() -> None:
             is_train = True,
             deterministic = is_train_det,
         )
-
-    # -----------------------------
-    # Val: full-image (deterministic)
-    # -----------------------------
-    data_root_p = Path(args.data_root)
-    val_split = "val" if (data_root_p / "val").exists() else "test"
-
-    if args.mode == "rgb":
-        ds_val = RGBTCC_RGBDataset(str(data_root_p), split=val_split, img_size=(768, 1024))
-    elif args.mode == "t":
-        ds_val = RGBTCC_TDataset(str(data_root_p), split=val_split, img_size=(768, 1024))
+        ds_val = RGBTCCDset(
+            base_val,
+            crop_size = args.crop_size,
+            sigma = args.sigma,
+            down = args.down,
+            is_train = False,
+            deterministic = bool(args.val_deterministic) or is_train_det,
+        )
     else:
-        ds_val = RGBTCC_PairedDataset(str(data_root_p), split=val_split, img_size=(768, 1024))
- 
+        # late / adaptive_late: paired
+        ds_train = RGBTCCDset(
+            base_train,
+            crop_size = args.crop_size,
+            sigma = args.sigma,
+            down = args.down,
+            is_train = True,
+            deterministic = is_train_det,
+        )
+        ds_val = RGBTCCDset(
+            base_val,
+            crop_size = args.crop_size,
+            sigma = args.sigma,
+            down = args.down,
+            is_train = False,
+            deterministic = bool(args.val_deterministic) or is_train_det,
+        )
+
     g = torch.Generator()
     g.manual_seed(args.seed)
 
@@ -370,9 +366,10 @@ def main() -> None:
     # Loss
     # Keep MSE over density maps; GT density is count-preserving (sum == number of points).
     def loss_fn(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-        pred = torch.nan_to_num(pred, nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
-        gt = torch.nan_to_num(gt, nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
-        return F.mse_loss(pred, gt, reduction = "mean")
+        # Stable fp32 loss (no clamping; clamping here can kill gradients).
+        pred_f = torch.nan_to_num(pred.float(), nan = 0.0, posinf = 0.0, neginf = 0.0)
+        gt_f = torch.nan_to_num(gt.float(), nan = 0.0, posinf = 0.0, neginf = 0.0)
+        return F.mse_loss(pred_f, gt_f, reduction = "mean")
 
     scaler = GradScaler(enabled = bool(args.amp))
 
@@ -520,7 +517,7 @@ def main() -> None:
         train_loss = running / max(1, step)
 
         # Validation
-        metrics = eval_one_epoch(model, dl_val, device, amp = bool(args.amp))
+        metrics = eval_one_epoch(model, dl_val, device, amp = False)  # eval in fp32 for stable metrics
         mae = metrics["mae"]
         rmse = metrics["rmse"]
         g1 = metrics["game1"]

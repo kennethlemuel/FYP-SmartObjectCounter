@@ -1,6 +1,5 @@
 import os
 import json
-import random
 import numpy as np
 import cv2
 import torch
@@ -63,53 +62,16 @@ def density_from_points(points_xy, h, w, sigma = 15.0):
     return dm
 
 
-def _load_points_json(json_path: str) -> np.ndarray:
-    import json
-    try:
-        with open(json_path, "r") as f:
-            obj = json.load(f)
-    except Exception:
-        return np.zeros((0, 2), dtype = np.float32)
+def _load_points_json(p):
+    with open(p, "r") as f:
+        data = json.load(f)
 
-    cand = None
+    for k in ["points", "keypoints", "annotations", "labels"]:
+        if k in data and isinstance(data[k], list):
+            pts = np.array(data[k], dtype = np.float32).reshape(-1, 2)
+            return pts
 
-    # Case 1: file is directly a list of points
-    if isinstance(obj, list):
-        cand = obj
-
-    # Case 2: dict with common keys
-    if cand is None and isinstance(obj, dict):
-        for k in ("points", "point", "annPoints", "annotations", "labels", "locations"):
-            if k in obj:
-                cand = obj[k]
-                break
-
-        # Shallow fallback: look one level down
-        if cand is None:
-            for v in obj.values():
-                if isinstance(v, dict):
-                    for kk in ("points", "point", "annPoints"):
-                        if kk in v:
-                            cand = v[kk]
-                            break
-                elif isinstance(v, list):
-                    # looks like Nx2 or Nx>=2
-                    if len(v) > 0 and isinstance(v[0], (list, tuple)) and len(v[0]) >= 2:
-                        cand = v
-                if cand is not None:
-                    break
-
-    if cand is None:
-        return np.zeros((0, 2), dtype = np.float32)
-
-    arr = np.asarray(cand, dtype = np.float32)
-    if arr.ndim == 1 and arr.size >= 2:
-        arr = arr.reshape(1, -1)
-    if arr.ndim != 2 or arr.shape[1] < 2:
-        return np.zeros((0, 2), dtype = np.float32)
-
-    return arr[:, :2]
-
+    return np.zeros((0, 2), dtype = np.float32)
 
 
 def _load_points_mat(p):
@@ -125,55 +87,16 @@ def _load_points_mat(p):
     return np.zeros((0, 2), dtype = np.float32)
 
 
-def load_points(label_path: str) -> np.ndarray:
-    # If caller already provided an existing file path with extension, load it directly.
-    if isinstance(label_path, str):
-        if label_path.endswith(".json") and os.path.isfile(label_path):
-            return _load_points_json(label_path)
-        if label_path.endswith(".mat") and os.path.isfile(label_path):
-            return _load_points_mat(label_path)
+def load_points(label_path_no_ext):
+    json_p = label_path_no_ext + ".json"
+    mat_p = label_path_no_ext + ".mat"
 
-    # Otherwise treat it as "no extension" (or strip any extension safely)
-    base, ext = os.path.splitext(label_path)
-    label_no_ext = base if ext in (".json", ".mat") else label_path
-
-    json_p = label_no_ext + ".json"
-    mat_p = label_no_ext + ".mat"
-
-    if os.path.isfile(json_p):
+    if os.path.exists(json_p):
         return _load_points_json(json_p)
-    if os.path.isfile(mat_p):
+    if os.path.exists(mat_p):
         return _load_points_mat(mat_p)
 
     return np.zeros((0, 2), dtype = np.float32)
-
-
-
-def seed_worker(worker_id: int) -> None:
-    """Deterministic DataLoader worker seeding."""
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-
-
-def _to_chw_tensor_rgb(bgr_u8: np.ndarray) -> torch.Tensor:
-    """OpenCV BGR uint8 -> CHW float32 RGB tensor in [0, 1]."""
-    rgb = bgr_u8[:, :, ::-1].astype(np.float32) / 255.0
-    chw = np.transpose(rgb, (2, 0, 1))
-    return torch.from_numpy(chw)
-
-
-def _to_chw_tensor_gray01(gray_u8: np.ndarray) -> torch.Tensor:
-    """OpenCV gray uint8 -> 1xHxW float32 tensor in [0, 1]."""
-    g = gray_u8.astype(np.float32) / 255.0
-    return torch.from_numpy(g[None, ...])
-
-
-def _normalize_imagenet(rgb_chw_01: torch.Tensor) -> torch.Tensor:
-    """ImageNet normalization for 3-channel CHW tensors in [0, 1]."""
-    mean = torch.tensor([0.485, 0.456, 0.406], dtype=rgb_chw_01.dtype, device=rgb_chw_01.device)[:, None, None]
-    std = torch.tensor([0.229, 0.224, 0.225], dtype=rgb_chw_01.dtype, device=rgb_chw_01.device)[:, None, None]
-    return (rgb_chw_01 - mean) / std
 
 
 def _to_t3(img_any):
@@ -577,86 +500,84 @@ def _read_id_list(txt_path):
     return ids
 
 
-def build_splits_rgbt_cc(data_root: str, split_root: str = ""):
-    # Returns base_train, base_val as List[RGBTCCBase].
-    from pathlib import Path
+def build_splits_rgbt_cc(root: str) -> tuple[list[RGBTCCBase], list[RGBTCCBase]]:
+    # Supports BOTH layouts:
+    # 1) Flat layout: <root>/<split>/*.jpg and *_GT.json
+    # 2) Nested layout: <root>/<split>/{RGB,T,GT}/*
+    root_p = Path(root)
 
-    data_root_p = Path(data_root)
-    split_root_p = Path(split_root) if split_root else None
-
-    def build_one(split_name: str) -> List[RGBTCCBase]:
-        split_dir = data_root_p / split_name
+    def build_one(split: str) -> list[RGBTCCBase]:
+        split_dir = root_p / split
         if not split_dir.exists():
-            raise FileNotFoundError(f"Split folder not found: {split_dir}")
+            raise FileNotFoundError(f"Missing split folder: {split_dir}")
 
-        rgb_dir = _first_existing_dir(split_dir, ["RGB", "rgb", "images_rgb", "Images/RGB", "images/RGB"])
-        t_dir = _first_existing_dir(split_dir, ["T", "t", "thermal", "Thermal", "images_t", "Images/T", "images/T"])
-        gt_dir = _first_existing_dir(split_dir, ["GT", "gt", "annotations", "ann", "label", "Labels", "Images/GT", "images/GT"])
+        # Detect layout
+        rgb_dir = split_dir / "RGB"
+        t_dir = split_dir / "T"
+        gt_dir = split_dir / "GT"
+        nested_ok = rgb_dir.exists() and t_dir.exists() and gt_dir.exists()
 
-        flat_layout = False
-        if rgb_dir is None or t_dir is None or gt_dir is None:
-            # Flat layout: files live directly under the split directory with names like
-            #   <id>_RGB.jpg, <id>_T.jpg, <id>_GT.json
-            flat_layout = True
-            rgb_dir = split_dir
-            t_dir = split_dir
-            gt_dir = split_dir
+        out: list[RGBTCCBase] = []
 
-        id_list = None
-        if split_root_p is not None:
-            cand = [f"{split_name}.txt", f"{split_name}_list.txt", f"{split_name}list.txt"]
-            for c in cand:
-                p = split_root_p / c
-                if p.exists():
-                    id_list = _read_id_list(p)
-                    break
+        if nested_ok:
+            rgb_files = sorted(rgb_dir.iterdir())
+            for rgb_p in rgb_files:
+                sid = rgb_p.stem
+                t_p = t_dir / f"{sid}{rgb_p.suffix}"
+                # Some datasets store T as .jpg even if RGB is .png, so also try any ext
+                if not t_p.exists():
+                    cand = sorted(t_dir.glob(f"{sid}.*"))
+                    if cand:
+                        t_p = cand[0]
+                gt_p = gt_dir / f"{sid}.mat"
+                if not gt_p.exists():
+                    # also allow json
+                    cand = sorted(gt_dir.glob(f"{sid}.*"))
+                    if cand:
+                        gt_p = cand[0]
+                if not t_p.exists() or not gt_p.exists():
+                    continue
+                out.append(RGBTCCBase(str(rgb_p), str(t_p), str(gt_p), sid))
+            if not out:
+                raise FileNotFoundError(
+                    f"Nested layout detected but no usable triples found under {split_dir}. "
+                    "Expected subfolders (RGB/T/GT)."
+                )
+            return out
 
-        img_exts = [".jpg", ".jpeg", ".png", ".bmp"]
-        gt_exts = [".json", ".npy", ".npz", ".mat"]
+        # Flat layout
+        gt_files = sorted(split_dir.glob("*_GT.*"))
+        if not gt_files:
+            raise FileNotFoundError(
+                f"Flat layout expected but no *_GT.* found in {split_dir}. "
+                "Expected subfolders (RGB/T/GT) OR flat files like <id>_RGB.jpg, <id>_T.jpg, <id>_GT.json."
+            )
 
-        if id_list is None:
-            rgb_paths = []
-            if flat_layout:
-                # Only use RGB images as anchors (avoid T / GT files).
-                for e in img_exts:
-                    rgb_paths.extend(split_dir.glob(f"*_RGB{e}"))
-            else:
-                for e in img_exts:
-                    rgb_paths.extend(rgb_dir.glob(f"*{e}"))
+        # Build maps by id
+        def first_match(stem: str):
+            m = sorted(split_dir.glob(stem + ".*"))
+            return m[0] if m else None
 
-            stems = []
-            for p in sorted(rgb_paths):
-                st = p.stem
-                if st.endswith("_RGB"):
-                    st = st[:-4]
-                stems.append(st)
-            stems = sorted(set(stems))
-        else:
-            stems = id_list
-
-        base = []
-        for stem in stems:
-            if flat_layout:
-                rgb_p = _match_by_stem(rgb_dir, f"{stem}_RGB", img_exts) or _match_by_stem(rgb_dir, stem, img_exts)
-                t_p = _match_by_stem(t_dir, f"{stem}_T", img_exts) or _match_by_stem(t_dir, stem, img_exts)
-                gt_p = _match_by_stem(gt_dir, f"{stem}_GT", gt_exts) or _match_by_stem(gt_dir, stem, gt_exts)
-            else:
-                rgb_p = _match_by_stem(rgb_dir, stem, img_exts) or _match_by_stem(rgb_dir, f"{stem}_RGB", img_exts)
-                t_p = _match_by_stem(t_dir, stem, img_exts) or _match_by_stem(t_dir, f"{stem}_T", img_exts)
-                gt_p = _match_by_stem(gt_dir, stem, gt_exts) or _match_by_stem(gt_dir, f"{stem}_GT", gt_exts)
-            if rgb_p is None or t_p is None or gt_p is None:
+        for gt_p in gt_files:
+            sid = gt_p.stem.rsplit("_GT", 1)[0]
+            rgb_p = first_match(f"{sid}_RGB")
+            t_p = first_match(f"{sid}_T")
+            if rgb_p is None or t_p is None:
                 continue
-            base.append(RGBTCCBase(str(rgb_p), str(t_p), str(gt_p), stem))
+            out.append(RGBTCCBase(str(rgb_p), str(t_p), str(gt_p), sid))
 
-        if len(base) == 0:
-            raise RuntimeError(f"No valid (RGB,T,GT) triplets found for split='{split_name}' under {split_dir}")
-        return base
+        if not out:
+            raise FileNotFoundError(
+                f"No usable triples found in {split_dir}. Check filenames and extensions."
+            )
+        return out
 
     base_train = build_one("train")
-    try:
-        base_val = build_one("val")
-    except FileNotFoundError:
-        base_val = build_one("test")
+
+    # Some releases use test as validation; keep old behavior.
+    val_split = "val" if (root_p / "val").exists() else "test"
+    base_val = build_one(val_split)
+
     return base_train, base_val
 
 
@@ -786,7 +707,6 @@ class RGBTCCDset(torch.utils.data.Dataset):
 
         out_h = self.crop_h // self.down
         out_w = self.crop_w // self.down
-
         if pts_crop.size == 0:
             den = np.zeros((out_h, out_w), dtype=np.float32)
         else:
