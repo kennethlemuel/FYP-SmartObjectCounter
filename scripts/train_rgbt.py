@@ -12,13 +12,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import GradScaler
 
-from datasets.rgbt_cc import (
-    RGBTCCDset,
-    RGBTCC_RGBDset,
-    RGBTCC_TDset,
-    build_splits_rgbt_cc,
-    seed_worker,
-)
+try:
+    from datasets.rgbt_cc import (
+        RGBTCCDset,
+        RGBTCC_RGBDset,
+        RGBTCC_TDset,
+        build_splits_rgbt_cc,
+        seed_worker as _seed_worker,
+    )
+except Exception:
+    # Fallback: keep training runnable even if datasets.rgbt_cc doesn't export seed_worker.
+    from datasets.rgbt_cc import (
+        RGBTCCDset,
+        RGBTCC_RGBDset,
+        RGBTCC_TDset,
+        build_splits_rgbt_cc,
+    )
+    _seed_worker = None
 from models.csrnet import CSRNet
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
@@ -42,6 +52,19 @@ def set_seed(seed: int, deterministic: bool = True) -> None:
             torch.use_deterministic_algorithms(True)
         except Exception:
             pass
+
+
+def seed_worker(worker_id: int) -> None:
+    """Seed DataLoader workers.
+
+    Use datasets.rgbt_cc.seed_worker when available for consistency.
+    """
+    if _seed_worker is not None:
+        _seed_worker(worker_id)
+        return
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 def _set_requires_grad(module: nn.Module, req: bool) -> None:
@@ -192,7 +215,7 @@ def main() -> None:
     ap.add_argument("--init_t_ckpt", type = str, default = "", help = "Optional: path to a pretrained T baseline checkpoint to warm-start adaptive_late.t_net")
 
     ap.add_argument("--freeze_backbones_epochs", type = int, default = 0)
-    ap.add_argument("--amp", action = "store_true", help = "Enable AMP for training forward/backward (evaluation runs in fp32)")
+    ap.add_argument("--amp", action = "store_true")
     ap.add_argument("--grad_accum", type = int, default = 1)
     ap.add_argument("--clip_grad", type = float, default = 0.0)
 
@@ -366,10 +389,7 @@ def main() -> None:
     # Loss
     # Keep MSE over density maps; GT density is count-preserving (sum == number of points).
     def loss_fn(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-        # Stable fp32 loss (no clamping; clamping here can kill gradients).
-        pred_f = torch.nan_to_num(pred.float(), nan = 0.0, posinf = 0.0, neginf = 0.0)
-        gt_f = torch.nan_to_num(gt.float(), nan = 0.0, posinf = 0.0, neginf = 0.0)
-        return F.mse_loss(pred_f, gt_f, reduction = "mean")
+        return F.mse_loss(pred, gt, reduction = "mean")
 
     scaler = GradScaler(enabled = bool(args.amp))
 
@@ -517,7 +537,7 @@ def main() -> None:
         train_loss = running / max(1, step)
 
         # Validation
-        metrics = eval_one_epoch(model, dl_val, device, amp = False)  # eval in fp32 for stable metrics
+        metrics = eval_one_epoch(model, dl_val, device, amp = bool(args.amp))
         mae = metrics["mae"]
         rmse = metrics["rmse"]
         g1 = metrics["game1"]

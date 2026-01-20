@@ -1,0 +1,43 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100_sanity_12759946.pbs101_20260120_005144.log
+[job] name=train_rgbt_adaptive_late_e100_sanity id=12759946.pbs101 host=x1000c0s4b0n0 time=Tue Jan 20 00:51:44 +08 2026
+[init] device = cuda
+[init] train = 1030  val = 200  workers = 4
+/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py:394: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = GradScaler(enabled = bool(args.amp))
+/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torchvision/transforms/functional.py:154: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:203.)
+  img = torch.from_numpy(pic.transpose((2, 0, 1))).contiguous()
+/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torchvision/transforms/functional.py:154: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:203.)
+  img = torch.from_numpy(pic.transpose((2, 0, 1))).contiguous()
+/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torchvision/transforms/functional.py:154: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:203.)
+  img = torch.from_numpy(pic.transpose((2, 0, 1))).contiguous()
+/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torchvision/transforms/functional.py:154: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:203.)
+  img = torch.from_numpy(pic.transpose((2, 0, 1))).contiguous()
+[e001 s0001/1030] loss = 1278.508057
+[e001 s0050/1030] loss = 1429.357343
+[e001 s0100/1030] loss = 1354.008722
+[e001 s0150/1030] loss = 1264.620508
+[e001 s0200/1030] loss = 1187.191134
+[e001 s0250/1030] loss = 1092.791645
+[e001 s0300/1030] loss = 1011.277889
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 575, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 472, in main
+    den_pred = model(x_rgb, x_t)
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/models/rgbt_adaptive_late.py", line 216, in forward
+    gate = self.gate(pred_rgb, pred_t)
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/models/rgbt_adaptive_late.py", line 46, in forward
+    [pred_rgb, pred_t, (pred_rgb - pred_t).abs(), 0.5 * (pred_rgb + pred_t)],
+                        ~~~~~~~~~^~~~~~~~
+RuntimeError: The size of tensor a (28) must match the size of tensor b (18) at non-singleton dimension 3

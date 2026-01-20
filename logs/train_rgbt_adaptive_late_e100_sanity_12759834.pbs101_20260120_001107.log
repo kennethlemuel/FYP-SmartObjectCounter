@@ -1,0 +1,17 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100_sanity_12759834.pbs101_20260120_001107.log
+[job] name=train_rgbt_adaptive_late_e100_sanity id=12759834.pbs101 host=x1000c0s4b0n1 time=Tue Jan 20 00:11:07 +08 2026
+[init] device = cuda
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 529, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 238, in main
+    base_train, _base_val = build_splits_rgbt_cc(args.data_root)
+                            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/datasets/rgbt_cc.py", line 570, in build_splits_rgbt_cc
+    base_train = build_one("train")
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/datasets/rgbt_cc.py", line 532, in build_one
+    raise FileNotFoundError(
+    ...<2 lines>...
+    )
+FileNotFoundError: Expected subfolders (RGB/T/GT) under /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/data/RGBT-CC-CVPR2021/train. Found rgb_dir=None, t_dir=None, gt_dir=None
