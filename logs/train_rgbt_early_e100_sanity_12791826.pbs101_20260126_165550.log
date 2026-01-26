@@ -1,0 +1,22 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_early_e100_sanity_12791826.pbs101_20260126_165550.log
+[job] name=train_rgbt_early_e100_sanity id=12791826.pbs101 host=x1000c0s0b0n0 time=Mon Jan 26 16:55:50 +08 2026
+torch 2.6.0+cu118 cuda True
+[init] device = cuda
+[init] train = 1030  val = 200  workers = 4
+/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py:384: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = GradScaler(enabled = bool(args.amp))
+[e001 s0001/1030] loss = 1336.484619
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 565, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 482, in main
+    den_pred = model(x_rgb, x_t)
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/models/rgbt_early.py", line 59, in forward
+    raise ValueError(f"x_rgb and x_t must share batch/spatial dims, got {tuple(x_rgb.shape)} vs {tuple(x_t.shape)}")
+ValueError: x_rgb and x_t must share batch/spatial dims, got (1, 3, 224, 224) vs (1, 1, 224, 155)

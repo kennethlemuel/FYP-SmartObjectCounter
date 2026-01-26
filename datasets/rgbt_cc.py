@@ -705,6 +705,10 @@ def _apply_crop_hflip_rgb_t_pts(rgb_np, t_np, pts_xy, crop_h: int, crop_w: int, 
     rgb_c = rgb_np[top:top + crop_h, left:left + crop_w]
     t_c = t_np[top:top + crop_h, left:left + crop_w]
 
+    # Ensure fixed crop size even if one modality hits image boundary
+    rgb_c = _pad_to_min_size(rgb_c, crop_h, crop_w)
+    t_c = _pad_to_min_size(t_c, crop_h, crop_w)
+
     pts = pts_xy.copy().astype(np.float32)
     if pts.size > 0:
         inside = (
@@ -808,7 +812,8 @@ class RGBTCCDset(torch.utils.data.Dataset):
             "crop_size": (self.crop_h, self.crop_w),
             "down": self.down,
         }
-        return rgb_t, t_t, den_t, image_id, float(gt_count)
+        gt_count = float(pts_crop.shape[0])
+        return rgb_t, t_t, den_t, image_id, gt_count
 
 
 class RGBTCC_RGBDset(torch.utils.data.Dataset):

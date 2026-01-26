@@ -1,0 +1,25 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_t_e100_sanity_12791764.pbs101_20260126_164033.log
+[job] name=train_rgbt_t_e100_sanity id=12791764.pbs101 host=x1000c2s2b0n1 time=Mon Jan 26 16:40:33 +08 2026
+torch 2.6.0+cu118 cuda True
+[init] device = cuda
+[init] train = 1030  val = 200  workers = 4
+/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py:384: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = GradScaler(enabled = bool(args.amp))
+[e001 s0001/1030] loss = 191.211060
+/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py:374: UserWarning: Using a target size (torch.Size([1, 1, 28, 28])) that is different to the input size (torch.Size([1, 1, 28, 19])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
+  den_loss = F.mse_loss(pred, gt, reduction = "mean")
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 565, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 496, in main
+    loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 374, in loss_fn
+    den_loss = F.mse_loss(pred, gt, reduction = "mean")
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/functional.py", line 3884, in mse_loss
+    expanded_input, expanded_target = torch.broadcast_tensors(input, target)
+                                      ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/functional.py", line 76, in broadcast_tensors
+    return _VF.broadcast_tensors(tensors)  # type: ignore[attr-defined]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+RuntimeError: The size of tensor a (19) must match the size of tensor b (28) at non-singleton dimension 3
