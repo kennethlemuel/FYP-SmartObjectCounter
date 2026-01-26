@@ -48,6 +48,6 @@ python3 -u scripts/train_rgbt.py \
   --sigma 15.0 \
   --down 8 \
   --amp \
-  --grad_accum 1 \
   --clip_grad 1.0 \
   --freeze_backbones_epochs 5
+

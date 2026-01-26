@@ -1,0 +1,14 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100_sanity_12765650.pbs101_20260120_195812.log
+[job] name=train_rgbt_adaptive_late_e100_sanity id=12765650.pbs101 host=x1000c0s1b0n0 time=Tue Jan 20 19:58:12 +08 2026
+[init] device = cuda
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 548, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 213, in main
+    base_train, _base_val = build_splits_rgbt_cc(args.data_root)
+                            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/datasets/rgbt_cc.py", line 614, in build_splits_rgbt_cc
+    train_ids = {b.sid for b in base_train}
+                 ^^^^^
+AttributeError: 'RGBTCCBase' object has no attribute 'sid'

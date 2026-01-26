@@ -1,6 +1,6 @@
 import os
-import random
 import json
+import random
 import numpy as np
 import cv2
 import torch
@@ -63,16 +63,53 @@ def density_from_points(points_xy, h, w, sigma = 15.0):
     return dm
 
 
-def _load_points_json(p):
-    with open(p, "r") as f:
-        data = json.load(f)
+def _load_points_json(json_path: str) -> np.ndarray:
+    import json
+    try:
+        with open(json_path, "r") as f:
+            obj = json.load(f)
+    except Exception:
+        return np.zeros((0, 2), dtype = np.float32)
 
-    for k in ["points", "keypoints", "annotations", "labels"]:
-        if k in data and isinstance(data[k], list):
-            pts = np.array(data[k], dtype = np.float32).reshape(-1, 2)
-            return pts
+    cand = None
 
-    return np.zeros((0, 2), dtype = np.float32)
+    # Case 1: file is directly a list of points
+    if isinstance(obj, list):
+        cand = obj
+
+    # Case 2: dict with common keys
+    if cand is None and isinstance(obj, dict):
+        for k in ("points", "point", "annPoints", "annotations", "labels", "locations"):
+            if k in obj:
+                cand = obj[k]
+                break
+
+        # Shallow fallback: look one level down
+        if cand is None:
+            for v in obj.values():
+                if isinstance(v, dict):
+                    for kk in ("points", "point", "annPoints"):
+                        if kk in v:
+                            cand = v[kk]
+                            break
+                elif isinstance(v, list):
+                    # looks like Nx2 or Nx>=2
+                    if len(v) > 0 and isinstance(v[0], (list, tuple)) and len(v[0]) >= 2:
+                        cand = v
+                if cand is not None:
+                    break
+
+    if cand is None:
+        return np.zeros((0, 2), dtype = np.float32)
+
+    arr = np.asarray(cand, dtype = np.float32)
+    if arr.ndim == 1 and arr.size >= 2:
+        arr = arr.reshape(1, -1)
+    if arr.ndim != 2 or arr.shape[1] < 2:
+        return np.zeros((0, 2), dtype = np.float32)
+
+    return arr[:, :2]
+
 
 
 def _load_points_mat(p):
@@ -88,16 +125,55 @@ def _load_points_mat(p):
     return np.zeros((0, 2), dtype = np.float32)
 
 
-def load_points(label_path_no_ext):
-    json_p = label_path_no_ext + ".json"
-    mat_p = label_path_no_ext + ".mat"
+def load_points(label_path: str) -> np.ndarray:
+    # If caller already provided an existing file path with extension, load it directly.
+    if isinstance(label_path, str):
+        if label_path.endswith(".json") and os.path.isfile(label_path):
+            return _load_points_json(label_path)
+        if label_path.endswith(".mat") and os.path.isfile(label_path):
+            return _load_points_mat(label_path)
 
-    if os.path.exists(json_p):
+    # Otherwise treat it as "no extension" (or strip any extension safely)
+    base, ext = os.path.splitext(label_path)
+    label_no_ext = base if ext in (".json", ".mat") else label_path
+
+    json_p = label_no_ext + ".json"
+    mat_p = label_no_ext + ".mat"
+
+    if os.path.isfile(json_p):
         return _load_points_json(json_p)
-    if os.path.exists(mat_p):
+    if os.path.isfile(mat_p):
         return _load_points_mat(mat_p)
 
     return np.zeros((0, 2), dtype = np.float32)
+
+
+
+def seed_worker(worker_id: int) -> None:
+    """Deterministic DataLoader worker seeding."""
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
+def _to_chw_tensor_rgb(bgr_u8: np.ndarray) -> torch.Tensor:
+    """OpenCV BGR uint8 -> CHW float32 RGB tensor in [0, 1]."""
+    rgb = bgr_u8[:, :, ::-1].astype(np.float32) / 255.0
+    chw = np.transpose(rgb, (2, 0, 1))
+    return torch.from_numpy(chw)
+
+
+def _to_chw_tensor_gray01(gray_u8: np.ndarray) -> torch.Tensor:
+    """OpenCV gray uint8 -> 1xHxW float32 tensor in [0, 1]."""
+    g = gray_u8.astype(np.float32) / 255.0
+    return torch.from_numpy(g[None, ...])
+
+
+def _normalize_imagenet(rgb_chw_01: torch.Tensor) -> torch.Tensor:
+    """ImageNet normalization for 3-channel CHW tensors in [0, 1]."""
+    mean = torch.tensor([0.485, 0.456, 0.406], dtype=rgb_chw_01.dtype, device=rgb_chw_01.device)[:, None, None]
+    std = torch.tensor([0.229, 0.224, 0.225], dtype=rgb_chw_01.dtype, device=rgb_chw_01.device)[:, None, None]
+    return (rgb_chw_01 - mean) / std
 
 
 def _to_t3(img_any):
@@ -501,16 +577,6 @@ def _read_id_list(txt_path):
     return ids
 
 
-def seed_worker(worker_id: int) -> None:
-    """DataLoader worker seeding helper.
-
-    Some training scripts import this from datasets.rgbt_cc.
-    """
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-
-
 def build_splits_rgbt_cc(data_root: str, split_root: str = ""):
     # Returns base_train, base_val as List[RGBTCCBase].
     from pathlib import Path
@@ -527,12 +593,11 @@ def build_splits_rgbt_cc(data_root: str, split_root: str = ""):
         t_dir = _first_existing_dir(split_dir, ["T", "t", "thermal", "Thermal", "images_t", "Images/T", "images/T"])
         gt_dir = _first_existing_dir(split_dir, ["GT", "gt", "annotations", "ann", "label", "Labels", "Images/GT", "images/GT"])
 
-        # Support BOTH layouts:
-        #  (1) subfolder layout: split/RGB/*, split/T/*, split/GT/*
-        #  (2) flat layout: split/*_RGB.jpg, split/*_T.jpg, split/*_GT.json
-        flat_mode = False
+        flat_layout = False
         if rgb_dir is None or t_dir is None or gt_dir is None:
-            flat_mode = True
+            # Flat layout: files live directly under the split directory with names like
+            #   <id>_RGB.jpg, <id>_T.jpg, <id>_GT.json
+            flat_layout = True
             rgb_dir = split_dir
             t_dir = split_dir
             gt_dir = split_dir
@@ -547,49 +612,43 @@ def build_splits_rgbt_cc(data_root: str, split_root: str = ""):
                     break
 
         img_exts = [".jpg", ".jpeg", ".png", ".bmp"]
-        # RGBT-CC commonly ships GT as JSON; keep legacy formats too.
         gt_exts = [".json", ".npy", ".npz", ".mat"]
 
-        def _normalize_flat_id(s: str) -> str:
-            for suf in ("_RGB", "_T", "_GT"):
-                if s.endswith(suf):
-                    return s[: -len(suf)]
-            return s
-
         if id_list is None:
-            if flat_mode:
-                rgb_paths = []
+            rgb_paths = []
+            if flat_layout:
+                # Only use RGB images as anchors (avoid T / GT files).
                 for e in img_exts:
                     rgb_paths.extend(split_dir.glob(f"*_RGB{e}"))
-                stems = sorted({p.stem[:-4] for p in rgb_paths})  # strip trailing '_RGB'
             else:
-                rgb_paths = []
                 for e in img_exts:
                     rgb_paths.extend(rgb_dir.glob(f"*{e}"))
-                stems = sorted({p.stem for p in rgb_paths})
+
+            stems = []
+            for p in sorted(rgb_paths):
+                st = p.stem
+                if st.endswith("_RGB"):
+                    st = st[:-4]
+                stems.append(st)
+            stems = sorted(set(stems))
         else:
-            stems = [_normalize_flat_id(s) for s in id_list] if flat_mode else id_list
+            stems = id_list
 
         base = []
         for stem in stems:
-            if flat_mode:
-                rgb_p = _match_by_stem(rgb_dir, f"{stem}_RGB", img_exts)
-                t_p = _match_by_stem(t_dir, f"{stem}_T", img_exts)
-                gt_p = _match_by_stem(gt_dir, f"{stem}_GT", gt_exts)
+            if flat_layout:
+                rgb_p = _match_by_stem(rgb_dir, f"{stem}_RGB", img_exts) or _match_by_stem(rgb_dir, stem, img_exts)
+                t_p = _match_by_stem(t_dir, f"{stem}_T", img_exts) or _match_by_stem(t_dir, stem, img_exts)
+                gt_p = _match_by_stem(gt_dir, f"{stem}_GT", gt_exts) or _match_by_stem(gt_dir, stem, gt_exts)
             else:
-                rgb_p = _match_by_stem(rgb_dir, stem, img_exts)
-                t_p = _match_by_stem(t_dir, stem, img_exts)
-                gt_p = _match_by_stem(gt_dir, stem, gt_exts)
+                rgb_p = _match_by_stem(rgb_dir, stem, img_exts) or _match_by_stem(rgb_dir, f"{stem}_RGB", img_exts)
+                t_p = _match_by_stem(t_dir, stem, img_exts) or _match_by_stem(t_dir, f"{stem}_T", img_exts)
+                gt_p = _match_by_stem(gt_dir, stem, gt_exts) or _match_by_stem(gt_dir, f"{stem}_GT", gt_exts)
             if rgb_p is None or t_p is None or gt_p is None:
                 continue
             base.append(RGBTCCBase(str(rgb_p), str(t_p), str(gt_p), stem))
 
         if len(base) == 0:
-            if flat_mode:
-                raise RuntimeError(
-                    f"No valid (RGB,T,GT) triplets found for split='{split_name}' under {split_dir}. "
-                    "Expected files like <id>_RGB.jpg, <id>_T.jpg, <id>_GT.json."
-                )
             raise RuntimeError(f"No valid (RGB,T,GT) triplets found for split='{split_name}' under {split_dir}")
         return base
 
@@ -707,6 +766,13 @@ class RGBTCCDset(torch.utils.data.Dataset):
         rgb_img = Image.open(rgb_path).convert("RGB")
         t_img = Image.open(t_path).convert("L")
 
+        # Ensure paired modalities share the same spatial size before cropping.
+        # Some RGBT-CC exports store Thermal at a different resolution;
+        # without resizing, random crop coordinates sampled on RGB can fall out-of-bounds on T.
+        if t_img.size != rgb_img.size:
+            t_img = t_img.resize(rgb_img.size, resample=Image.BILINEAR)
+
+
         rgb_np = np.asarray(rgb_img)
         t_np = np.asarray(t_img)
 
@@ -719,20 +785,21 @@ class RGBTCCDset(torch.utils.data.Dataset):
             deterministic=self.deterministic, is_train=self.is_train
         )
 
-        rgb_t = _tf_rgb(rgb_np)
+        rgb_t = _normalize_imagenet(_to_chw_tensor_rgb(rgb_np))
 
-        t3_np = np.repeat(t_np[..., None], 3, axis = 2)
-        t_t = _tf_t3(t3_np)
+        t_1 = _to_chw_tensor_gray01(t_np)
+        t_3 = t_1.repeat(3, 1, 1)
+        t_t = _normalize_imagenet(t_3)
 
         out_h = self.crop_h // self.down
         out_w = self.crop_w // self.down
 
         if pts_crop.size == 0:
-            den = np.zeros((out_h, out_w), dtype = np.float32)
+            den = np.zeros((out_h, out_w), dtype=np.float32)
         else:
             pts_ds = pts_crop / float(self.down)
-            # CSRNet-style density builder (count-preserving normalization)
-            den = density_from_points(pts_ds, out_h, out_w, sigma = self.sigma / float(self.down))
+            # Use the local CSRNet-style density builder (count-preserving normalization)
+            den = density_from_points(pts_ds, out_h, out_w, sigma=self.sigma / float(self.down))
 
         den_t = torch.from_numpy(den).unsqueeze(0).float()
 

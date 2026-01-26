@@ -1,0 +1,13 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_early_e100_12790178.pbs101_20260126_133832.log
+usage: train_rgbt.py [-h] --data_root DATA_ROOT --out_dir OUT_DIR
+                     [--mode {rgb,t,early,late,adaptive_late}]
+                     [--epochs EPOCHS] [--batch_size BATCH_SIZE]
+                     [--workers WORKERS] [--seed SEED] [--deterministic]
+                     [--amp] [--lr LR] [--weight_decay WEIGHT_DECAY]
+                     [--use_onecycle] [--max_lr MAX_LR] [--gate_lr GATE_LR]
+                     [--max_gate_lr MAX_GATE_LR]
+                     [--freeze_backbones_epochs FREEZE_BACKBONES_EPOCHS]
+                     [--modality_dropout_p MODALITY_DROPOUT_P]
+                     [--grad_accum GRAD_ACCUM] [--clip_grad CLIP_GRAD]
+                     [--crop_size CROP_SIZE] [--sigma SIGMA] [--down DOWN]
+train_rgbt.py: error: the following arguments are required: --out_dir

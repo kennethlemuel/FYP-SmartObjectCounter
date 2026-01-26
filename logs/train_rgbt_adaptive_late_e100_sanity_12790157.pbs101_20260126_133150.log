@@ -1,0 +1,25 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100_sanity_12790157.pbs101_20260126_133150.log
+[job] name=train_rgbt_adaptive_late_e100_sanity id=12790157.pbs101 host=x1000c1s3b0n0 time=Mon Jan 26 13:31:50 +08 2026
+[init] device = cuda
+[init] train = 1030  val = 200  workers = 4
+[e001 s0001/1030] loss = 0.609739
+[e001 s0050/1030] loss = 1.073513
+[e001 s0100/1030] loss = 1.022022
+[e001 s0150/1030] loss = 0.982863
+[e001 s0200/1030] loss = 0.918531
+[e001 s0250/1030] loss = 0.875494
+[e001 s0300/1030] loss = 0.827059
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 456, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 373, in main
+    den_pred = model(x_rgb, x_t)
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/models/rgbt_adaptive_late.py", line 144, in forward
+    gate_in = torch.cat([pred_rgb, pred_t, conf_rgb, conf_t], dim = 1)  # [B,4,H,W]
+RuntimeError: Sizes of tensors must match except in dimension 1. Expected size 28 but got size 18 for tensor number 1 in the list.

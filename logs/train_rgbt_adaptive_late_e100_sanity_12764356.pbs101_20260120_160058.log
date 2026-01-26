@@ -1,0 +1,16 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100_sanity_12764356.pbs101_20260120_160058.log
+[job] name=train_rgbt_adaptive_late_e100_sanity id=12764356.pbs101 host=x1000c0s1b0n1 time=Tue Jan 20 16:00:58 +08 2026
+[init] device = cuda
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 549, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 214, in main
+    base_train, _base_val = build_splits_rgbt_cc(args.data_root)
+                            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/datasets/rgbt_cc.py", line 607, in build_splits_rgbt_cc
+    base_train = build_one("train")
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/datasets/rgbt_cc.py", line 571, in build_one
+    rgb_files.extend(glob.glob(os.path.join(split_dir, f"*_RGB{ext}")))
+                     ^^^^
+NameError: name 'glob' is not defined. Did you forget to import 'glob'?
