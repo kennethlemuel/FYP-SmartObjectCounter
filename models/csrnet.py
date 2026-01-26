@@ -27,5 +27,6 @@ class CSRNet(nn.Module):
         x = self.frontend(x)
         x = self.backend(x)
         x = self.output_layer(x)
+        x = torch.relu(x)
         return x
         

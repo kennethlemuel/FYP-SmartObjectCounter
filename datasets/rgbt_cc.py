@@ -2,7 +2,11 @@ import os
 import json
 import random
 import numpy as np
-import cv2
+try:
+    import cv2  # optional
+except Exception:
+    cv2 = None
+
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -766,13 +770,6 @@ class RGBTCCDset(torch.utils.data.Dataset):
         rgb_img = Image.open(rgb_path).convert("RGB")
         t_img = Image.open(t_path).convert("L")
 
-        # Ensure paired modalities share the same spatial size before cropping.
-        # Some RGBT-CC exports store Thermal at a different resolution;
-        # without resizing, random crop coordinates sampled on RGB can fall out-of-bounds on T.
-        if t_img.size != rgb_img.size:
-            t_img = t_img.resize(rgb_img.size, resample=Image.BILINEAR)
-
-
         rgb_np = np.asarray(rgb_img)
         t_np = np.asarray(t_img)
 
@@ -811,7 +808,7 @@ class RGBTCCDset(torch.utils.data.Dataset):
             "crop_size": (self.crop_h, self.crop_w),
             "down": self.down,
         }
-        return rgb_t, t_t, den_t, image_id, meta
+        return rgb_t, t_t, den_t, image_id, float(gt_count)
 
 
 class RGBTCC_RGBDset(torch.utils.data.Dataset):
@@ -822,8 +819,8 @@ class RGBTCC_RGBDset(torch.utils.data.Dataset):
         return len(self.paired)
 
     def __getitem__(self, idx: int):
-        rgb_t, _t_t, den_t, image_id, meta = self.paired[idx]
-        return rgb_t, den_t, image_id, meta
+        rgb_t, _t_t, den_t, image_id, gt_count = self.paired[idx]
+        return rgb_t, den_t, image_id, gt_count
 
 
 class RGBTCC_TDset(torch.utils.data.Dataset):
@@ -834,5 +831,5 @@ class RGBTCC_TDset(torch.utils.data.Dataset):
         return len(self.paired)
 
     def __getitem__(self, idx: int):
-        _rgb_t, t_t, den_t, image_id, meta = self.paired[idx]
-        return t_t, den_t, image_id, meta
+        _rgb_t, t_t, den_t, image_id, gt_count = self.paired[idx]
+        return t_t, den_t, image_id, gt_count

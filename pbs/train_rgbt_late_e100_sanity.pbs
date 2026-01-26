@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N train_rgbt_late_e100
+#PBS -N train_rgbt_late_e100_sanity
 #PBS -P personal-kenneth0
 #PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
 #PBS -l walltime=12:00:00
@@ -11,16 +11,17 @@ REPO="/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter"
 LOG_DIR="${REPO}/logs"
 
 : "${PBS_JOBID:=manual}"
-: "${PBS_JOBNAME:=train_rgbt_late_e100}"
+: "${PBS_JOBNAME:=train_rgbt_late_e100_sanity}"
 
 TS="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="${LOG_DIR}/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.log"
-OUT_DIR="${REPO}/outputs/rgbt_late_e100/${PBS_JOBID}_${TS}"
+OUT_DIR="${REPO}/outputs/${PBS_JOBNAME}/${PBS_JOBID}_${TS}"
 
-mkdir -p "${LOG_DIR}" "$(dirname "${OUT_DIR}")"
+mkdir -p "${LOG_DIR}" "${SAVE_DIR}"
 cd "${REPO}"
 
 exec > "${LOG_FILE}" 2>&1
+
 echo "[log] ${LOG_FILE}"
 echo "[job] name=${PBS_JOBNAME} id=${PBS_JOBID} host=$(hostname) time=$(date)"
 
@@ -28,24 +29,24 @@ module purge
 module load pytorch/2.6.0-py3-cu11.8
 
 export PYTHONUNBUFFERED=1
-export PYTHONPATH="${REPO}:${PYTHONPATH}"
+export PYTHONPATH="${REPO}:${PYTHONPATH:-}"
 
-EPOCHS=100
-SEED=42
+python3 -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 
 python3 -u scripts/train_rgbt.py \
   --mode late \
   --data_root "${REPO}/data/RGBT-CC-CVPR2021" \
-  --out_dir "${OUT_DIR}" \
-  --seed "${SEED}" \
-  --epochs "${EPOCHS}" \
+  --epochs 100 \
+  --lr 1e-5 \
+  --wd 1e-4 \
   --batch_size 1 \
   --workers 4 \
-  --lr 1e-5 \
-  --weight_decay 1e-4 \
+  --seed 42 \
   --crop_size 224 \
   --sigma 15.0 \
   --down 8 \
+  --log_every 50 \
+  --val_every 1 \
   --amp \
-  --grad_accum 1 \
-  --clip_grad 1.0
+ --out_dir "${OUT_DIR}" \
+

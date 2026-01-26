@@ -205,10 +205,8 @@ def main() -> None:
     ap.add_argument("--amp", action = "store_true")
     ap.add_argument("--grad_accum", type = int, default = 1)
     ap.add_argument("--clip_grad", type = float, default = 0.0)
-
-    # Modality dropout for robustness (paired modes).
-    # With probability p, drop (zero) either RGB or Thermal for that step (never both).
-    ap.add_argument("--modality_dropout", type = float, default = 0.0)
+    ap.add_argument("--lambda_cnt", type = float, default = 1e-3,
+                    help = "Weight for count-level L1 loss on summed density (helps MAE).")
 
     ap.add_argument("--crop_size", type = int, default = 224)
     ap.add_argument("--sigma", type = float, default = 15.0)
@@ -229,13 +227,7 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[init] device = {device}")
-
-    # Build base splits (paths)
-    base_train, base_val = build_splits_rgbt_cc(args.data_root)
-    data_root_p = Path(args.data_root)
-    val_split = "val" if (data_root_p / "val").exists() else "test"
-
-        # Build base splits (paths)
+    # Build base splits (official train/val split)
     base_train, base_val = build_splits_rgbt_cc(args.data_root)
 
     # -----------------------------
@@ -252,6 +244,14 @@ def main() -> None:
             is_train = True,
             deterministic = is_train_det,
         )
+        ds_val = RGBTCC_RGBDset(
+            base_val,
+            crop_size = args.crop_size,
+            sigma = args.sigma,
+            down = args.down,
+            is_train = False,
+            deterministic = True,
+        )
     elif args.mode == "t":
         ds_train = RGBTCC_TDset(
             base_train,
@@ -260,6 +260,14 @@ def main() -> None:
             down = args.down,
             is_train = True,
             deterministic = is_train_det,
+        )
+        ds_val = RGBTCC_TDset(
+            base_val,
+            crop_size = args.crop_size,
+            sigma = args.sigma,
+            down = args.down,
+            is_train = False,
+            deterministic = True,
         )
     else:
         # early / late / adaptive_late train on paired crops
@@ -271,41 +279,15 @@ def main() -> None:
             is_train = True,
             deterministic = is_train_det,
         )
+        ds_val = RGBTCCDset(
+            base_val,
+            crop_size = args.crop_size,
+            sigma = args.sigma,
+            down = args.down,
+            is_train = False,
+            deterministic = True,
+        )
 
-    # -----------------------------
-    # Val: full-image (deterministic)
-    # -----------------------------
-    data_root_p = Path(args.data_root)
-    val_split = "val" if (data_root_p / "val").exists() else "test"
-
-    if args.mode == "rgb":
-        ds_val = RGBTCC_RGBDataset(
-            root = args.data_root,
-            split = val_split,
-            img_size = (768, 1024),
-            sigma = args.sigma,
-            return_pts = False,
-            out_stride = args.down,
-        )
-    elif args.mode == "t":
-        ds_val = RGBTCC_TDataset(
-            root = args.data_root,
-            split = val_split,
-            img_size = (768, 1024),
-            sigma = args.sigma,
-            return_pts = False,
-            out_stride = args.down,
-        )
-    else:
-        ds_val = RGBTCC_PairedDataset(
-            root = args.data_root,
-            split = val_split,
-            img_size = (768, 1024),
-            sigma = args.sigma,
-            return_pts = False,
-            out_stride = args.down,
-        )
- 
     g = torch.Generator()
     g.manual_seed(args.seed)
 
@@ -384,11 +366,21 @@ def main() -> None:
 
     # Loss
     # Keep MSE over density maps; GT density is count-preserving (sum == number of points).
-    def loss_fn(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    def loss_fn(pred: torch.Tensor, gt: torch.Tensor, lambda_cnt: float = 1e-3) -> torch.Tensor:
+        # Density-map MSE (mean) + optional count-level L1 on summed density.
         pred = torch.nan_to_num(pred, nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
         gt = torch.nan_to_num(gt, nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
-        return F.mse_loss(pred, gt, reduction = "mean")
-
+    
+        den_loss = F.mse_loss(pred, gt, reduction = "mean")
+    
+        if lambda_cnt > 0.0:
+            pred_cnt = pred.sum(dim = (2, 3))
+            gt_cnt = gt.sum(dim = (2, 3))
+            cnt_loss = F.l1_loss(pred_cnt, gt_cnt, reduction = "mean")
+            return den_loss + (lambda_cnt * cnt_loss)
+    
+        return den_loss
+    
     scaler = GradScaler(enabled = bool(args.amp))
 
     # Optimizer and LR schedule
@@ -465,22 +457,13 @@ def main() -> None:
                 x_t = x_t.to(device, non_blocking = True)
                 den_gt = den_gt.to(device, non_blocking = True)
 
-                # Modality dropout (paired inputs) for robustness.
-                if args.modality_dropout and args.modality_dropout > 0.0:
-                    if random.random() < float(args.modality_dropout):
-                        if random.random() < 0.5:
-                            x_rgb = torch.zeros_like(x_rgb)
-                        else:
-                            x_t = torch.zeros_like(x_t)
-
-
                 if args.amp:
                     with torch.autocast(device_type = "cuda", dtype = torch.float16):
                         den_pred = model(x_rgb, x_t)
-                        loss = loss_fn(den_pred, den_gt)
+                        loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
                 else:
                     den_pred = model(x_rgb, x_t)
-                    loss = loss_fn(den_pred, den_gt)
+                    loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
 
             elif args.mode == "early":
                 x_rgb, x_t, den_gt, _img_id, _meta = batch
@@ -491,22 +474,13 @@ def main() -> None:
                 x_t = x_t.to(device, non_blocking = True)
                 den_gt = den_gt.to(device, non_blocking = True)
 
-                # Modality dropout (paired inputs) for robustness.
-                if args.modality_dropout and args.modality_dropout > 0.0:
-                    if random.random() < float(args.modality_dropout):
-                        if random.random() < 0.5:
-                            x_rgb = torch.zeros_like(x_rgb)
-                        else:
-                            x_t = torch.zeros_like(x_t)
-
-
                 if args.amp:
                     with torch.autocast(device_type = "cuda", dtype = torch.float16):
                         den_pred = model(x_rgb, x_t)
-                        loss = loss_fn(den_pred, den_gt)
+                        loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
                 else:
                     den_pred = model(x_rgb, x_t)
-                    loss = loss_fn(den_pred, den_gt)
+                    loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
 
             else:
                 x, den_gt, _img_id, _meta = batch
@@ -516,10 +490,10 @@ def main() -> None:
                 if args.amp:
                     with torch.autocast(device_type = "cuda", dtype = torch.float16):
                         den_pred = model(x)
-                        loss = loss_fn(den_pred, den_gt)
+                        loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
                 else:
                     den_pred = model(x)
-                    loss = loss_fn(den_pred, den_gt)
+                    loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
 
             loss = loss / max(1, int(args.grad_accum))
 

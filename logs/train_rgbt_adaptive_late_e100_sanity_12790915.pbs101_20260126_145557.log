@@ -1,0 +1,18 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_late_e100_sanity_12790915.pbs101_20260126_145557.log
+[job] name=train_rgbt_adaptive_late_e100_sanity id=12790915.pbs101 host=x1000c2s1b0n0 time=Mon Jan 26 14:55:57 +08 2026
+torch 2.6.0+cu118 cuda True
+usage: train_rgbt.py [-h] --data_root DATA_ROOT --out_dir OUT_DIR
+                     [--mode {rgb,t,early,late,adaptive_late}]
+                     [--epochs EPOCHS] [--batch_size BATCH_SIZE]
+                     [--workers WORKERS] [--seed SEED] [--deterministic]
+                     [--val_deterministic] [--lr LR]
+                     [--weight_decay WEIGHT_DECAY] [--use_onecycle]
+                     [--max_lr MAX_LR] [--gate_lr GATE_LR]
+                     [--max_gate_lr MAX_GATE_LR]
+                     [--init_rgb_ckpt INIT_RGB_CKPT]
+                     [--init_t_ckpt INIT_T_CKPT]
+                     [--freeze_backbones_epochs FREEZE_BACKBONES_EPOCHS]
+                     [--amp] [--grad_accum GRAD_ACCUM] [--clip_grad CLIP_GRAD]
+                     [--lambda_cnt LAMBDA_CNT] [--crop_size CROP_SIZE]
+                     [--sigma SIGMA] [--down DOWN]
+train_rgbt.py: error: the following arguments are required: --out_dir

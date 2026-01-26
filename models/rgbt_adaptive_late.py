@@ -5,118 +5,192 @@ import torch.nn.functional as F
 from models.csrnet import CSRNet
 
 
-def _resize_density_sum_preserving(d: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
+class _MultiScaleGateNet(nn.Module):
+    """Multi-scale spatial gate.
+
+    Inputs are two density predictions pred_rgb and pred_t, each [B,1,H,W].
+    Outputs a gate g in [0,1] with shape [B,1,H,W].
     """
-    Resize a density map while approximately preserving total count (sum over H,W).
-    d: [B,1,H,W]
-    """
-    if d.shape[-2:] == size:
-        return d
-    h0, w0 = d.shape[-2:]
-    h1, w1 = size
-    d_up = F.interpolate(d, size = size, mode = "bilinear", align_corners = False)
-    # Preserve sum approximately: scale by area ratio
-    scale = (h0 * w0) / float(h1 * w1)
-    return d_up * scale
+
+    def __init__(self, hidden: int = 32, scales = (1, 2, 4)):
+        super().__init__()
+        self.scales = tuple(int(s) for s in scales)
+        if len(self.scales) == 0:
+            raise ValueError("scales must be non-empty")
+        if any(s <= 0 for s in self.scales):
+            raise ValueError(f"All scales must be positive, got {self.scales}")
+
+        self.conv1 = nn.Conv2d(4, hidden, kernel_size = 3, padding = 1)
+        self.conv2 = nn.Conv2d(hidden, 1, kernel_size = 1, padding = 0)
+
+        # Start from an unbiased 0.5 gate everywhere.
+        nn.init.zeros_(self.conv2.weight)
+        nn.init.zeros_(self.conv2.bias)
+
+    def _logits(self, x: torch.Tensor) -> torch.Tensor:
+        h = F.relu(self.conv1(x), inplace = True)
+        return self.conv2(h)
+
+    def forward(self, pred_rgb: torch.Tensor, pred_t: torch.Tensor, return_aux: bool = False):
+        x = torch.cat(
+            [pred_rgb, pred_t, (pred_rgb - pred_t).abs(), 0.5 * (pred_rgb + pred_t)],
+            dim = 1,
+        )
+        _, _, H, W = x.shape
+
+        logits_scales = []
+        for s in self.scales:
+            if s == 1:
+                x_s = x
+            else:
+                x_s = F.avg_pool2d(x, kernel_size = s, stride = s)
+            logit_s = self._logits(x_s)
+            if logit_s.shape[-2:] != (H, W):
+                logit_s = F.interpolate(logit_s, size = (H, W), mode = "bilinear", align_corners = False)
+            logits_scales.append(logit_s)
+
+        logits = torch.stack(logits_scales, dim = 0).mean(dim = 0)
+        gate = torch.sigmoid(logits)
+
+        if not return_aux:
+            return gate
+
+        aux = {
+            "gate": gate,
+            "gate_logits": logits,
+            "gate_logits_scales": logits_scales,
+        }
+        return gate, aux
 
 
-@torch.no_grad()
-def _to_grayscale(x: torch.Tensor) -> torch.Tensor:
-    # x: [B,C,H,W]
-    if x.shape[1] == 1:
-        return x
-    if x.shape[1] >= 3:
-        r = x[:, 0:1]
-        g = x[:, 1:2]
-        b = x[:, 2:3]
-        return 0.2989 * r + 0.5870 * g + 0.1140 * b
-    return x.mean(dim = 1, keepdim = True)
+def _strip_module_prefix(state_dict: dict) -> dict:
+    out = {}
+    for k, v in state_dict.items():
+        out[k[7:]] = v if k.startswith("module.") else v
+    # The above line keeps keys for non-module, but we lost original key.
+    # Fix: rebuild properly.
+    out = {}
+    for k, v in state_dict.items():
+        kk = k[len("module."):] if k.startswith("module.") else k
+        out[kk] = v
+    return out
 
 
-def _confidence_map(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """
-    Simple reliability proxy: normalized gradient magnitude in [0,1].
-    Casts to float32 so ops like quantile work under AMP.
-    Returns [B,1,H,W].
-    """
-    x = _to_grayscale(x.float())
-    b, _, h, w = x.shape
+def _extract_state_dict(ckpt_obj) -> dict:
+    """Accepts raw state_dict or common checkpoint wrappers."""
+    if isinstance(ckpt_obj, dict):
+        for key in ["state_dict", "model", "model_state_dict", "net", "network"]:
+            if key in ckpt_obj and isinstance(ckpt_obj[key], dict):
+                ckpt_obj = ckpt_obj[key]
+                break
 
-    # Finite differences (padding to keep shape)
-    dx = x[:, :, :, 1:] - x[:, :, :, :-1]
-    dx = F.pad(dx, (0, 1, 0, 0))
-    dy = x[:, :, 1:, :] - x[:, :, :-1, :]
-    dy = F.pad(dy, (0, 0, 0, 1))
-    mag = torch.sqrt(dx * dx + dy * dy + eps)
+    if not isinstance(ckpt_obj, dict):
+        raise TypeError("Checkpoint does not contain a usable state_dict dict.")
 
-    # Robust normalize using top-1% quantile per image
-    mag_flat = mag.view(b, -1)
-    # quantile needs float/double; ensured by .float() above
-    denom = (mag_flat.quantile(0.99, dim = 1) + eps).view(b, 1, 1, 1)
-    conf = (mag / denom).clamp(0.0, 1.0)
+    return _strip_module_prefix(ckpt_obj)
 
-    # Light smoothing helps stability
-    conf = F.avg_pool2d(conf, kernel_size = 3, stride = 1, padding = 1)
-    return conf
+
+def _filter_by_prefix(sd: dict, prefix: str) -> dict:
+    out = {}
+    for k, v in sd.items():
+        if k.startswith(prefix):
+            out[k[len(prefix):]] = v
+    return out
 
 
 class CSRNetRGBT_AdaptiveLate(nn.Module):
-    """
-    Reliability-aware adaptive late fusion.
+    """Adaptive late fusion: two CSRNet experts + multi-scale gate."""
 
-    - Two CSRNet experts (RGB, Thermal) predict density maps.
-    - A gate network predicts a spatial mixing weight.
-    - Confidence maps (from input gradients) modulate the gate so the fusion trusts the cleaner modality.
-
-    This avoids temporal continuity and only needs paired RGB-T frames.
-    """
-
-    def __init__(self, load_imagenet: bool = True, load_weights: bool = True) -> None:
+    def __init__(
+        self,
+        load_imagenet: bool | None = None,
+        load_weights: bool | None = None,  # legacy name
+        gate_hidden: int = 32,
+        gate_scales = (1, 2, 4),
+        output_size = None,
+        count_preserve_resize: bool = True,
+    ):
         super().__init__()
-        # Accept both flags for compatibility with older scripts.
-        use_pretrained = bool(load_imagenet or load_weights)
 
-        self.rgb_net = CSRNet(load_imagenet = use_pretrained)
-        self.t_net = CSRNet(load_imagenet = use_pretrained)
+        # Resolve aliasing
+        if load_imagenet is None:
+            load_imagenet = True if load_weights is None else bool(load_weights)
+        else:
+            if load_weights is not None and bool(load_imagenet) != bool(load_weights):
+                raise ValueError("Conflicting values: load_imagenet and load_weights differ.")
 
-        # Gate network consumes [pred_rgb, pred_t, conf_rgb, conf_t] => 4 channels
-        self.gate = nn.Sequential(
-            nn.Conv2d(4, 16, kernel_size = 3, padding = 1),
-            nn.ReLU(inplace = True),
-            nn.Conv2d(16, 16, kernel_size = 3, padding = 1),
-            nn.ReLU(inplace = True),
-            nn.Conv2d(16, 1, kernel_size = 1),
-        )
+        self.rgb_net = CSRNet(load_imagenet = bool(load_imagenet))
+        self.t_net = CSRNet(load_imagenet = bool(load_imagenet))
 
-    def forward(self, x_rgb: torch.Tensor, x_t: torch.Tensor) -> torch.Tensor:
-        # Make sure both modalities share input spatial size.
-        if x_t.shape[-2:] != x_rgb.shape[-2:]:
-            x_t = F.interpolate(x_t, size = x_rgb.shape[-2:], mode = "bilinear", align_corners = False)
+        # train_rgbt.py expects .gate (or .gate_net)
+        self.gate = _MultiScaleGateNet(hidden = gate_hidden, scales = gate_scales)
+        self.gate_net = self.gate
 
-        # Experts
-        pred_rgb = self.rgb_net(x_rgb)
-        pred_t = self.t_net(x_t)
+        self.output_size = output_size
+        self.count_preserve_resize = bool(count_preserve_resize)
 
-        # Align prediction maps if any stride/padding mismatch occurs
-        target_hw = pred_rgb.shape[-2:]
-        if pred_t.shape[-2:] != target_hw:
-            pred_t = _resize_density_sum_preserving(pred_t, target_hw)
+    @staticmethod
+    def _resize_density_sum_preserving(density: torch.Tensor, size) -> torch.Tensor:
+        if density.shape[-2:] == tuple(size):
+            return density
+        in_sum = density.sum(dim = (2, 3), keepdim = True)
+        out = F.interpolate(density, size = size, mode = "bilinear", align_corners = False)
+        out_sum = out.sum(dim = (2, 3), keepdim = True).clamp_min(1e-6)
+        return out * (in_sum / out_sum)
 
-        # Confidence maps (compute in float32; downsample to prediction resolution)
-        conf_rgb = _confidence_map(x_rgb)
-        conf_t = _confidence_map(x_t)
+    def _maybe_resize(self, pred: torch.Tensor) -> torch.Tensor:
+        if self.output_size is None:
+            return pred
+        if self.count_preserve_resize:
+            return self._resize_density_sum_preserving(pred, self.output_size)
+        return F.interpolate(pred, size = self.output_size, mode = "bilinear", align_corners = False)
 
-        conf_rgb = F.interpolate(conf_rgb, size = target_hw, mode = "bilinear", align_corners = False)
-        conf_t = F.interpolate(conf_t, size = target_hw, mode = "bilinear", align_corners = False)
+    def _match_pair(self, a: torch.Tensor, b: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Ensure spatial sizes match (sum-preserving for the resized one)."""
+        if a.shape[-2:] == b.shape[-2:]:
+            return a, b
+        # Default: resize b to a
+        b2 = self._resize_density_sum_preserving(b, a.shape[-2:])
+        return a, b2
 
-        # Gate
-        gate_in = torch.cat([pred_rgb.float(), pred_t.float(), conf_rgb, conf_t], dim = 1)  # [B,4,H,W]
-        gate = torch.sigmoid(self.gate(gate_in))  # [B,1,H,W] in [0,1]
+    @torch.no_grad()
+    def load_pretrained_experts(
+        self,
+        rgb_ckpt_path: str | None = None,
+        t_ckpt_path: str | None = None,
+        map_location: str = "cpu",
+        strict: bool = False,
+    ):
+        if rgb_ckpt_path:
+            ckpt = torch.load(rgb_ckpt_path, map_location = map_location)
+            sd = _extract_state_dict(ckpt)
+            sd_rgb = _filter_by_prefix(sd, "rgb_net.")
+            self.rgb_net.load_state_dict(sd_rgb if sd_rgb else sd, strict = strict)
 
-        # Reliability-aware weighting (explicitly uses confidence)
-        w_rgb = gate * conf_rgb
-        w_t = (1.0 - gate) * conf_t
-        denom = (w_rgb + w_t).clamp_min(1e-6)
+        if t_ckpt_path:
+            ckpt = torch.load(t_ckpt_path, map_location = map_location)
+            sd = _extract_state_dict(ckpt)
+            sd_t = _filter_by_prefix(sd, "t_net.")
+            self.t_net.load_state_dict(sd_t if sd_t else sd, strict = strict)
 
-        fused = (w_rgb / denom) * pred_rgb + (w_t / denom) * pred_t
-        return fused
+    def forward(self, x_rgb: torch.Tensor, x_t3: torch.Tensor) -> torch.Tensor:
+        pred_rgb = self._maybe_resize(self.rgb_net(x_rgb))
+        pred_t = self._maybe_resize(self.t_net(x_t3))
+        pred_rgb, pred_t = self._match_pair(pred_rgb, pred_t)
+        gate = self.gate(pred_rgb, pred_t)
+        return gate * pred_rgb + (1.0 - gate) * pred_t
+
+    def forward_with_aux(self, x_rgb: torch.Tensor, x_t3: torch.Tensor):
+        pred_rgb = self._maybe_resize(self.rgb_net(x_rgb))
+        pred_t = self._maybe_resize(self.t_net(x_t3))
+        pred_rgb, pred_t = self._match_pair(pred_rgb, pred_t)
+
+        gate, gate_aux = self.gate(pred_rgb, pred_t, return_aux = True)
+        pred = gate * pred_rgb + (1.0 - gate) * pred_t
+
+        aux = {
+            "pred_rgb": pred_rgb,
+            "pred_t": pred_t,
+        }
+        aux.update(gate_aux)
+        return pred, aux

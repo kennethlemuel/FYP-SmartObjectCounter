@@ -46,4 +46,5 @@ class CSRNetRGBT_Early(nn.Module):
         x = self.frontend(x4)
         x = self.backend(x)
         x = self.output_layer(x)
+        x = torch.relu(x)
         return x
