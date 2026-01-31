@@ -1,29 +1,52 @@
 #!/bin/bash
 #PBS -N eval_rgbt_early_test
 #PBS -P personal-kenneth0
-#PBS -l select=1:ngpus=1:ncpus=8:mem=32gb
+#PBS -l select=1:ncpus=8:ngpus=1:mem=24gb
 #PBS -l walltime=02:00:00
 #PBS -j oe
 
-REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
-LOG_DIR=$REPO/logs
+set -euo pipefail
+
+cd "$PBS_O_WORKDIR"
+
+REPO="/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter"
+DATA_ROOT="$REPO/data/RGBT-CC-CVPR2021"
+CKPT="$REPO/outputs/rgbt_early_e100_count_ema/ckpt_best.pt"
+
+LOG_DIR="$REPO/logs/eval"
 mkdir -p "$LOG_DIR"
-cd "$REPO" || exit 1
+LOG="$LOG_DIR/eval_rgbt_early_test_${PBS_JOBID}_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$LOG") 2>&1
+
+echo "[job] name=eval_rgbt_early_test id=${PBS_JOBID:-unknown} host=$(hostname) time=$(date)"
 
 module purge
-module load pytorch/2.6.0-py3-cu11.8
+module load python/pytorch/2.6.0
+
 export PYTHONPATH="$REPO:$PYTHONPATH"
+export OMP_NUM_THREADS=8
 
-exec > "$LOG_DIR/${PBS_JOBNAME}_${PBS_JOBID}.log" 2>&1
+python -V
+python -c "import torch; print('torch:', torch.__version__, 'cuda:', torch.version.cuda, 'cuda_available:', torch.cuda.is_available())" || true
+nvidia-smi || true
 
-python -u scripts/eval_rgbt.py \
-  --mode early \
-  --data_root ./data/RGBT-CC-CVPR2021 \
+if [ ! -d "$DATA_ROOT" ]; then
+  echo "[error] DATA_ROOT not found: $DATA_ROOT"
+  exit 2
+fi
+if [ ! -f "$CKPT" ]; then
+  echo "[error] CKPT not found: $CKPT"
+  exit 2
+fi
+
+python -u "$REPO/scripts/eval_rgbt.py" \
+  --mode rgbt_early \
+  --data_root "$DATA_ROOT" \
   --split test \
-  --ckpt outputs/rgbt_early_e100_count_ema/ckpt_best.pt \
-  --use_ema \
-  --img_h 768 \
-  --img_w 1024 \
-  --sigma 15.0 \
-  --out_stride 8 \
-  --num_workers 4
+  --ckpt "$CKPT" \
+  --img_h 768 --img_w 1024 \
+  --sigma 15 --downsample 8 \
+  --use_ema
+
+
+echo "[done] $(date)"

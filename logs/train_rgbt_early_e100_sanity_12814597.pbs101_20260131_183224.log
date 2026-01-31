@@ -1,0 +1,3 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_early_e100_sanity_12814597.pbs101_20260131_183224.log
+[job] name=train_rgbt_early_e100_sanity id=12814597.pbs101 host=x1000c0s2b0n0 time=Sat Jan 31 18:32:24 +08 2026
+torch 2.6.0+cu118 cuda True

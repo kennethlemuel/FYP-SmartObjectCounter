@@ -1,0 +1,3 @@
+[job] name=eval_rgb_test id=12814598.pbs101 host=x1000c0s2b0n0 time=Sat Jan 31 18:33:35 +08 2026
+ModuleCmd_Load.c(244):ERROR:105: Unable to locate a modulefile for 'python/pytorch/2.6.0'
+/var/spool/pbs/mom_priv/jobs/12814598.pbs101.SC: line 26: PYTHONPATH: unbound variable
