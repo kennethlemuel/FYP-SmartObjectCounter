@@ -1,0 +1,11 @@
+[job] name=eval_rgbt_late_test id=12814624.pbs101 host=x1000c0s0b0n1 time=Sat Jan 31 19:11:10 +08 2026
+[repo] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+[mode] rgbt_late
+[ckpt] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/rgbt_late_e100_count_ema/ckpt_best.pt
+[data] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/data/RGBT-CC-CVPR2021
+[img] 768x1024
+cuda(3):ERROR:105: Unable to locate a modulefile for 'cuda/11.8'
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/eval_rgbt.py", line 29, in <module>
+    from models.rgbt_early import CSRNetRGBT_EarlyFusion
+ImportError: cannot import name 'CSRNetRGBT_EarlyFusion' from 'models.rgbt_early' (/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/models/rgbt_early.py)

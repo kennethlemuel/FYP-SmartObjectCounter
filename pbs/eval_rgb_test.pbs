@@ -1,34 +1,50 @@
 #!/bin/bash
-#PBS -N eval_rgb_test
 #PBS -P personal-kenneth0
-#PBS -l select=1:ncpus=8:ngpus=1:mem=24gb
-#PBS -l walltime=02:00:00
+#PBS -N eval_rgb_test
+#PBS -l select=1:ncpus=8:ngpus=1:mem=32gb
+#PBS -l walltime=01:00:00
 #PBS -j oe
 
 set -euo pipefail
 
-cd "$PBS_O_WORKDIR"
+REPO_DEFAULT="/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter"
+if [ -n "${PBS_O_WORKDIR:-}" ] && [ -d "${PBS_O_WORKDIR:-}" ] && [ -f "${PBS_O_WORKDIR}/scripts/eval_rgbt.py" ]; then
+  REPO="$PBS_O_WORKDIR"
+else
+  REPO="$REPO_DEFAULT"
+fi
 
-REPO="/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter"
+cd "$REPO"
+
+MODE="rgb"
 DATA_ROOT="$REPO/data/RGBT-CC-CVPR2021"
 CKPT="$REPO/outputs/rgb_e100_count_ema/ckpt_best.pt"
 
+IMG_H=768
+IMG_W=1024
+
 LOG_DIR="$REPO/logs/eval"
 mkdir -p "$LOG_DIR"
-LOG="$LOG_DIR/eval_rgb_test_${PBS_JOBID}_$(date +%Y%m%d_%H%M%S).log"
-exec > >(tee -a "$LOG") 2>&1
+TS="$(date +%Y%m%d_%H%M%S)"
+JOBID="${PBS_JOBID:-nojobid}"
+JOBNAME="${PBS_JOBNAME:-eval_rgb_test}"
+LOG_FILE="$LOG_DIR/${JOBNAME}_${JOBID}_${TS}.log"
+exec > "$LOG_FILE" 2>&1
 
-echo "[job] name=eval_rgb_test id=${PBS_JOBID:-unknown} host=$(hostname) time=$(date)"
+echo "[job] name=$JOBNAME id=$JOBID host=$(hostname) time=$(date)"
+echo "[repo] $REPO"
+echo "[mode] $MODE"
+echo "[ckpt] $CKPT"
+echo "[data] $DATA_ROOT"
+echo "[img] ${IMG_H}x${IMG_W}"
 
 module purge
-module load python/pytorch/2.6.0
+module load cuda/11.8
+module load pytorch/2.6.0-py3-cu11.8
 
-export PYTHONPATH="$REPO:$PYTHONPATH"
 export OMP_NUM_THREADS=8
-
-python -V
-python -c "import torch; print('torch:', torch.__version__, 'cuda:', torch.version.cuda, 'cuda_available:', torch.cuda.is_available())" || true
-nvidia-smi || true
+export PYTHONUNBUFFERED=1
+export PYTHONPATH="$REPO:${PYTHONPATH:-}"
 
 if [ ! -d "$DATA_ROOT" ]; then
   echo "[error] DATA_ROOT not found: $DATA_ROOT"
@@ -36,17 +52,18 @@ if [ ! -d "$DATA_ROOT" ]; then
 fi
 if [ ! -f "$CKPT" ]; then
   echo "[error] CKPT not found: $CKPT"
-  exit 2
+  exit 3
 fi
 
-python -u "$REPO/scripts/eval_rgbt.py" \
-  --mode rgb \
+python3 -u scripts/eval_rgbt.py \
   --data_root "$DATA_ROOT" \
+  --mode "$MODE" \
   --split test \
+  --img_h "$IMG_H" \
+  --img_w "$IMG_W" \
   --ckpt "$CKPT" \
-  --img_h 768 --img_w 1024 \
-  --sigma 15 --downsample 8 \
-  --use_ema
+  --batch_size 1 \
+  --num_workers 4 \
+  --save_vis 0
 
-
-echo "[done] $(date)"
+echo "[done] log=$LOG_FILE"

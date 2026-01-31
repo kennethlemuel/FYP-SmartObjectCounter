@@ -1,0 +1,7 @@
+[job] name=eval_rgbt_adaptive_late_test id=12814623.pbs101 host=x1000c0s0b0n1 time=Sat Jan 31 19:10:25 +08 2026
+[repo] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+[mode] rgbt_adaptive_late
+[ckpt] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/rgbt_adaptive_late_e100_count_ema/ckpt_best.pt
+[data] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/data/RGBT-CC-CVPR2021
+[img] 768x1024
+cuda(3):ERROR:105: Unable to locate a modulefile for 'cuda/11.8'
