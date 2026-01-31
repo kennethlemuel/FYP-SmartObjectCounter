@@ -1,0 +1,36 @@
+[job] name=eval_rgbt_late_test id=12814659.pbs101 host=x1000c0s1b0n0 time=Sat Jan 31 20:49:52 +08 2026
+[repo] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+[mode] rgbt_late
+[ckpt] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/rgbt_late_e100_count_ema/ckpt_best.pt
+[data] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/data/RGBT-CC-CVPR2021
+Python 3.13.3
+torch: 2.6.0+cu118 cuda: 11.8 cuda_available: True
+Sat Jan 31 20:50:20 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 550.163.01             Driver Version: 550.163.01     CUDA Version: 12.4     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA A100-SXM4-40GB          On  |   00000000:81:00.0 Off |                    0 |
+| N/A   43C    P0             53W /  400W |       1MiB /  40960MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+usage: eval_rgbt.py [-h] --root ROOT [--split {train,val,test}]
+                    --mode {rgb,t,early,late,adaptive_late} --ckpt CKPT
+                    [--img_h IMG_H] [--img_w IMG_W] [--out_stride OUT_STRIDE]
+                    [--sigma SIGMA] [--batch_size BATCH_SIZE]
+                    [--num_workers NUM_WORKERS] [--device {cuda,cpu}]
+                    [--seed SEED] [--deterministic] [--load_imagenet]
+                    [--benchmark] [--bench_warmup BENCH_WARMUP]
+                    [--bench_iters BENCH_ITERS] [--out_json OUT_JSON]
+eval_rgbt.py: error: argument --mode: invalid choice: 'rgbt_late' (choose from rgb, t, early, late, adaptive_late)

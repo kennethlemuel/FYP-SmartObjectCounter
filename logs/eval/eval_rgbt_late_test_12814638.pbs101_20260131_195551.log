@@ -1,0 +1,31 @@
+[job] name=eval_rgbt_late_test id=12814638.pbs101 host=x1000c0s2b0n0 time=Sat Jan 31 19:55:51 +08 2026
+[repo] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+[mode] rgbt_late
+[ckpt] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/rgbt_late_e100_count_ema/ckpt_best.pt
+[data] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/data/RGBT-CC-CVPR2021
+Python 3.13.3
+torch: 2.6.0+cu118 cuda: 11.8 cuda_available: True
+Sat Jan 31 19:56:10 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 550.163.01             Driver Version: 550.163.01     CUDA Version: 12.4     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA A100-SXM4-40GB          On  |   00000000:81:00.0 Off |                    0 |
+| N/A   43C    P0             55W /  400W |       1MiB /  40960MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/eval_rgbt.py", line 29, in <module>
+    from models.rgbt_early import CSRNetRGBT_EarlyFusion
+ImportError: cannot import name 'CSRNetRGBT_EarlyFusion' from 'models.rgbt_early' (/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/models/rgbt_early.py)

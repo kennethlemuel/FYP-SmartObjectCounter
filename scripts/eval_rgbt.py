@@ -26,9 +26,20 @@ from datasets.rgbt_cc import (
 
 #Models
 from models.csrnet import CSRNet
-from models.rgbt_early import CSRNetRGBT_EarlyFusion
-from models.rgbt_late import CSRNetRGBT_Late
-from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
+try:
+    from models.rgbt_early import CSRNetRGBT_EarlyFusion as CSRNetRGBT_Early
+except ImportError:
+    from models.rgbt_early import CSRNetRGBT_Early
+
+try:
+    from models.rgbt_late import CSRNetRGBT_LateFusion as CSRNetRGBT_Late
+except ImportError:
+    from models.rgbt_late import CSRNetRGBT_Late
+
+try:
+    from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLateFusion as CSRNetRGBT_AdaptiveLate
+except ImportError:
+    from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
 
 
 def set_seed(seed: int, deterministic: bool = True) -> None:
@@ -92,7 +103,7 @@ def build_model(mode: str, load_imagenet: bool) -> torch.nn.Module:
         #Thermal is provided as 3-channel tensor (replicated) by the dataset loader.
         return CSRNet(load_imagenet = False)
     if mode == "early":
-        return CSRNetRGBT_EarlyFusion(load_imagenet = load_imagenet)
+        return CSRNetRGBT_Early(load_imagenet = load_imagenet)
     if mode == "late":
         return CSRNetRGBT_Late(load_imagenet = load_imagenet)
     if mode == "adaptive_late":
