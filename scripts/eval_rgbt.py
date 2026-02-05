@@ -5,7 +5,7 @@ import json
 import math
 import argparse
 import random
-from typing import Dict, Any, Tuple, Any
+from typing import Dict, Any, Tuple
 
 import numpy as np
 import torch
@@ -120,7 +120,6 @@ def build_dataset(
     img_w: int,
     out_stride: int,
     sigma: float,
-    seed: int,
 ) -> torch.utils.data.Dataset:
     img_size = (img_h, img_w)
     mode = mode.lower()
@@ -132,7 +131,6 @@ def build_dataset(
             img_size = img_size,
             out_stride = out_stride,
             sigma = sigma,
-            seed = seed,
             return_pts = False,
         )
     if mode == "t":
@@ -142,7 +140,6 @@ def build_dataset(
             img_size = img_size,
             out_stride = out_stride,
             sigma = sigma,
-            seed = seed,
             return_pts = False,
         )
     if mode == "early":
@@ -152,7 +149,6 @@ def build_dataset(
             img_size = img_size,
             out_stride = out_stride,
             sigma = sigma,
-            seed = seed,
             return_pts = False,
         )
 
@@ -163,10 +159,8 @@ def build_dataset(
         img_size = img_size,
         out_stride = out_stride,
         sigma = sigma,
-        seed = seed,
         return_pts = False,
     )
-
 
 @torch.no_grad()
 def forward_density(model: torch.nn.Module, mode: str, batch: Tuple[Any, ...], device: torch.device) -> torch.Tensor:
@@ -369,8 +363,8 @@ def main() -> None:
         img_w = args.img_w,
         out_stride = args.out_stride,
         sigma = args.sigma,
-        seed = args.seed,
     )
+
 
     generator = torch.Generator()
     generator.manual_seed(args.seed)

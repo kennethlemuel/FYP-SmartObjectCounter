@@ -6,10 +6,14 @@ from models.csrnet import CSRNet
 
 
 class _MultiScaleGateNet(nn.Module):
-    """Multi-scale spatial gate.
+    """
+    Multi-scale spatial gate.
 
-    Inputs are two density predictions pred_rgb and pred_t, each [B,1,H,W].
-    Outputs a gate g in [0,1] with shape [B,1,H,W].
+    Inputs: pred_rgb, pred_t, each [B, 1, H, W]
+    Output: gate in [0, 1], shape [B, 1, H, W]
+
+    Uses 6-channel gating input to match older checkpoints:
+      [pred_rgb, pred_t, |diff|, mean, max, min]
     """
 
     def __init__(self, hidden: int = 32, scales = (1, 2, 4)):
@@ -20,10 +24,9 @@ class _MultiScaleGateNet(nn.Module):
         if any(s <= 0 for s in self.scales):
             raise ValueError(f"All scales must be positive, got {self.scales}")
 
-        self.conv1 = nn.Conv2d(4, hidden, kernel_size = 3, padding = 1)
+        self.conv1 = nn.Conv2d(6, hidden, kernel_size = 3, padding = 1)
         self.conv2 = nn.Conv2d(hidden, 1, kernel_size = 1, padding = 0)
 
-        # Start from an unbiased 0.5 gate everywhere.
         nn.init.zeros_(self.conv2.weight)
         nn.init.zeros_(self.conv2.bias)
 
@@ -32,10 +35,12 @@ class _MultiScaleGateNet(nn.Module):
         return self.conv2(h)
 
     def forward(self, pred_rgb: torch.Tensor, pred_t: torch.Tensor, return_aux: bool = False):
-        x = torch.cat(
-            [pred_rgb, pred_t, (pred_rgb - pred_t).abs(), 0.5 * (pred_rgb + pred_t)],
-            dim = 1,
-        )
+        diff = (pred_rgb - pred_t).abs()
+        mean = 0.5 * (pred_rgb + pred_t)
+        mx = torch.maximum(pred_rgb, pred_t)
+        mn = torch.minimum(pred_rgb, pred_t)
+
+        x = torch.cat([pred_rgb, pred_t, diff, mean, mx, mn], dim = 1)
         _, _, H, W = x.shape
 
         logits_scales = []
@@ -44,6 +49,7 @@ class _MultiScaleGateNet(nn.Module):
                 x_s = x
             else:
                 x_s = F.avg_pool2d(x, kernel_size = s, stride = s)
+
             logit_s = self._logits(x_s)
             if logit_s.shape[-2:] != (H, W):
                 logit_s = F.interpolate(logit_s, size = (H, W), mode = "bilinear", align_corners = False)
@@ -63,56 +69,21 @@ class _MultiScaleGateNet(nn.Module):
         return gate, aux
 
 
-def _strip_module_prefix(state_dict: dict) -> dict:
-    out = {}
-    for k, v in state_dict.items():
-        out[k[7:]] = v if k.startswith("module.") else v
-    # The above line keeps keys for non-module, but we lost original key.
-    # Fix: rebuild properly.
-    out = {}
-    for k, v in state_dict.items():
-        kk = k[len("module."):] if k.startswith("module.") else k
-        out[kk] = v
-    return out
-
-
-def _extract_state_dict(ckpt_obj) -> dict:
-    """Accepts raw state_dict or common checkpoint wrappers."""
-    if isinstance(ckpt_obj, dict):
-        for key in ["state_dict", "model", "model_state_dict", "net", "network"]:
-            if key in ckpt_obj and isinstance(ckpt_obj[key], dict):
-                ckpt_obj = ckpt_obj[key]
-                break
-
-    if not isinstance(ckpt_obj, dict):
-        raise TypeError("Checkpoint does not contain a usable state_dict dict.")
-
-    return _strip_module_prefix(ckpt_obj)
-
-
-def _filter_by_prefix(sd: dict, prefix: str) -> dict:
-    out = {}
-    for k, v in sd.items():
-        if k.startswith(prefix):
-            out[k[len(prefix):]] = v
-    return out
-
-
 class CSRNetRGBT_AdaptiveLate(nn.Module):
-    """Adaptive late fusion: two CSRNet experts + multi-scale gate."""
+    """Adaptive late fusion: two CSRNet experts + (optional) per-modality calibration + multi-scale gate."""
 
     def __init__(
         self,
         load_imagenet: bool | None = None,
-        load_weights: bool | None = None,  # legacy name
+        load_weights: bool | None = None,  # legacy alias
         gate_hidden: int = 32,
         gate_scales = (1, 2, 4),
         output_size = None,
         count_preserve_resize: bool = True,
+        use_calibration: bool = True,
     ):
         super().__init__()
 
-        # Resolve aliasing
         if load_imagenet is None:
             load_imagenet = True if load_weights is None else bool(load_weights)
         else:
@@ -122,12 +93,27 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
         self.rgb_net = CSRNet(load_imagenet = bool(load_imagenet))
         self.t_net = CSRNet(load_imagenet = bool(load_imagenet))
 
-        # train_rgbt.py expects .gate (or .gate_net)
+        self.use_calibration = bool(use_calibration)
+        if self.use_calibration:
+            # These names match your checkpoint keys: rgb_cal.*, t_cal.*
+            self.rgb_cal = nn.Conv2d(1, 1, kernel_size = 1, bias = True)
+            self.t_cal = nn.Conv2d(1, 1, kernel_size = 1, bias = True)
+
+            with torch.no_grad():
+                self.rgb_cal.weight.fill_(1.0)
+                self.rgb_cal.bias.zero_()
+                self.t_cal.weight.fill_(1.0)
+                self.t_cal.bias.zero_()
+
         self.gate = _MultiScaleGateNet(hidden = gate_hidden, scales = gate_scales)
-        self.gate_net = self.gate
 
         self.output_size = output_size
         self.count_preserve_resize = bool(count_preserve_resize)
+
+    @property
+    def gate_net(self):
+        # Expose gate_net for code that expects it, without registering a second module in state_dict.
+        return self.gate
 
     @staticmethod
     def _resize_density_sum_preserving(density: torch.Tensor, size) -> torch.Tensor:
@@ -146,37 +132,25 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
         return F.interpolate(pred, size = self.output_size, mode = "bilinear", align_corners = False)
 
     def _match_pair(self, a: torch.Tensor, b: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Ensure spatial sizes match (sum-preserving for the resized one)."""
         if a.shape[-2:] == b.shape[-2:]:
             return a, b
-        # Default: resize b to a
         b2 = self._resize_density_sum_preserving(b, a.shape[-2:])
         return a, b2
 
-    @torch.no_grad()
-    def load_pretrained_experts(
-        self,
-        rgb_ckpt_path: str | None = None,
-        t_ckpt_path: str | None = None,
-        map_location: str = "cpu",
-        strict: bool = False,
-    ):
-        if rgb_ckpt_path:
-            ckpt = torch.load(rgb_ckpt_path, map_location = map_location)
-            sd = _extract_state_dict(ckpt)
-            sd_rgb = _filter_by_prefix(sd, "rgb_net.")
-            self.rgb_net.load_state_dict(sd_rgb if sd_rgb else sd, strict = strict)
-
-        if t_ckpt_path:
-            ckpt = torch.load(t_ckpt_path, map_location = map_location)
-            sd = _extract_state_dict(ckpt)
-            sd_t = _filter_by_prefix(sd, "t_net.")
-            self.t_net.load_state_dict(sd_t if sd_t else sd, strict = strict)
+    def _apply_cal(self, pred_rgb: torch.Tensor, pred_t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if not self.use_calibration:
+            return pred_rgb, pred_t
+        pred_rgb = self.rgb_cal(pred_rgb)
+        pred_t = self.t_cal(pred_t)
+        return pred_rgb, pred_t
 
     def forward(self, x_rgb: torch.Tensor, x_t3: torch.Tensor) -> torch.Tensor:
         pred_rgb = self._maybe_resize(self.rgb_net(x_rgb))
         pred_t = self._maybe_resize(self.t_net(x_t3))
         pred_rgb, pred_t = self._match_pair(pred_rgb, pred_t)
+
+        pred_rgb, pred_t = self._apply_cal(pred_rgb, pred_t)
+
         gate = self.gate(pred_rgb, pred_t)
         return gate * pred_rgb + (1.0 - gate) * pred_t
 
@@ -184,6 +158,8 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
         pred_rgb = self._maybe_resize(self.rgb_net(x_rgb))
         pred_t = self._maybe_resize(self.t_net(x_t3))
         pred_rgb, pred_t = self._match_pair(pred_rgb, pred_t)
+
+        pred_rgb, pred_t = self._apply_cal(pred_rgb, pred_t)
 
         gate, gate_aux = self.gate(pred_rgb, pred_t, return_aux = True)
         pred = gate * pred_rgb + (1.0 - gate) * pred_t

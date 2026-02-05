@@ -1,0 +1,8 @@
+[job] name=eval_rgbt_adaptive_late_test id=12814669.pbs101 host=x1000c0s0b0n1 time=Sat Jan 31 21:13:45 +08 2026
+[repo] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+[mode] adaptive_late
+[ckpt] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/rgbt_adaptive_late_e100_count_ema/ckpt_best.pt
+[data] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/data/RGBT-CC-CVPR2021
+[img] 768x1024
+ModuleCmd_Load.c(244):ERROR:105: Unable to locate a modulefile for 'python/pytorch/2.6.0'
+/var/spool/pbs/mom_priv/jobs/12814669.pbs101.SC: line 34: python: command not found
