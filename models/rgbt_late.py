@@ -48,4 +48,4 @@ class CSRNetRGBT_Late(nn.Module):
 
         x = torch.cat([den_rgb, den_t], dim = 1)  # [B, 2, H', W']
         out = self.fuse(x)
-        return out
+        return torch.relu(out)

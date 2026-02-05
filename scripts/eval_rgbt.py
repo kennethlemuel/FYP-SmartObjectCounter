@@ -74,8 +74,18 @@ def strip_module_prefix(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.
             out[k] = v
     return out
 
+def remap_checkpoint_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """Best-effort key remaps for backward compatibility across refactors."""
+    out: Dict[str, torch.Tensor] = {}
+    for k, v in state_dict.items():
+        kk = k
+        # Older adaptive-late checkpoints sometimes used "gate_net.*" naming.
+        if kk.startswith("gate_net."):
+            kk = "gate." + kk[len("gate_net."):]
+        out[kk] = v
+    return out
 
-def load_checkpoint(model: torch.nn.Module, ckpt_path: str, device: torch.device) -> None:
+def load_checkpoint(model: torch.nn.Module, ckpt_path: str, device: torch.device, strict: bool = False) -> None:
     ckpt = torch.load(ckpt_path, map_location = device)
     if isinstance(ckpt, dict):
         if "state_dict" in ckpt:
@@ -88,7 +98,8 @@ def load_checkpoint(model: torch.nn.Module, ckpt_path: str, device: torch.device
         sd = ckpt
 
     sd = strip_module_prefix(sd)
-    missing, unexpected = model.load_state_dict(sd, strict = False)
+    sd = remap_checkpoint_keys(sd)
+    missing, unexpected = model.load_state_dict(sd, strict = strict)
     if missing:
         print(f"[WARN] Missing keys when loading checkpoint ({len(missing)}): {missing[:8]}{'...' if len(missing) > 8 else ''}")
     if unexpected:
@@ -101,7 +112,7 @@ def build_model(mode: str, load_imagenet: bool) -> torch.nn.Module:
         return CSRNet(load_imagenet = load_imagenet)
     if mode == "t":
         #Thermal is provided as 3-channel tensor (replicated) by the dataset loader.
-        return CSRNet(load_imagenet = False)
+        return CSRNet(load_imagenet = load_imagenet)
     if mode == "early":
         return CSRNetRGBT_Early(load_imagenet = load_imagenet)
     if mode == "late":
@@ -143,7 +154,8 @@ def build_dataset(
             return_pts = False,
         )
     if mode == "early":
-        return RGBTCC_EarlyFusionDataset(
+        # Evaluate early-fusion using the paired RGB + thermal loader to match the two-input model API.
+        return RGBTCC_PairedDataset(
             root = root,
             split = split,
             img_size = img_size,
@@ -170,7 +182,7 @@ def forward_density(model: torch.nn.Module, mode: str, batch: Tuple[Any, ...], d
     """
     mode = mode.lower()
 
-    if mode in ["rgb", "t", "early"]:
+    if mode in ["rgb", "t"]:
         #dataset returns: (x, den, fname, gt_count)
         x = batch[0].to(device, non_blocking = True)
         out = model(x)
@@ -296,6 +308,7 @@ def evaluate(
         t0 = time.perf_counter()
 
         pred_den = forward_density(model, mode, batch, device)
+        pred_den = torch.nan_to_num(pred_den, nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
         pred_count = pred_den.sum(dim = (1, 2, 3)).detach().float().cpu().numpy()
 
         if device.type == "cuda" and measure_timing:
@@ -326,6 +339,8 @@ def main() -> None:
     parser.add_argument("--split", type = str, default = "val", choices = ["train", "val", "test"])
     parser.add_argument("--mode", type = str, required = True, choices = ["rgb", "t", "early", "late", "adaptive_late"])
     parser.add_argument("--ckpt", type = str, required = True, help = "Path to checkpoint (.pth).")
+    parser.add_argument("--strict_ckpt", action = "store_true", help = "Load checkpoint with strict=True (fail on missing/unexpected keys).")
+    parser.add_argument("--zero_cal_bias", action = "store_true", help = "After loading, zero rgb_cal/t_cal biases (debug constant-offset blow-up).")
 
     #Fair default for SOTA comparisons: evaluate on full resolution used by RGBT-CC (768x1024).
     parser.add_argument("--img_h", type = int, default = 768)
@@ -381,7 +396,13 @@ def main() -> None:
 
     model = build_model(mode = args.mode, load_imagenet = args.load_imagenet)
     model.to(device)
-    load_checkpoint(model, args.ckpt, device)
+    load_checkpoint(model, args.ckpt, device, strict = args.strict_ckpt)
+    if args.zero_cal_bias:
+        for name in ["rgb_cal", "t_cal"]:
+            layer = getattr(model, name, None)
+            if layer is not None and getattr(layer, "bias", None) is not None:
+                with torch.no_grad():
+                    layer.bias.zero_()
 
     metrics: Dict[str, Any] = {}
     metrics.update({

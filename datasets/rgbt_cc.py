@@ -3,7 +3,7 @@ import json
 import random
 import numpy as np
 try:
-    import cv2  # optional
+    import cv2
 except Exception:
     cv2 = None
 
@@ -160,9 +160,9 @@ def seed_worker(worker_id: int) -> None:
     random.seed(worker_seed)
 
 
-def _to_chw_tensor_rgb(bgr_u8: np.ndarray) -> torch.Tensor:
-    """OpenCV BGR uint8 -> CHW float32 RGB tensor in [0, 1]."""
-    rgb = bgr_u8[:, :, ::-1].astype(np.float32) / 255.0
+def _to_chw_tensor_rgb(rgb_u8: np.ndarray) -> torch.Tensor:
+    """RGB uint8 -> CHW float32 tensor in [0, 1]."""
+    rgb = rgb_u8.astype(np.float32) / 255.0
     chw = np.transpose(rgb, (2, 0, 1))
     return torch.from_numpy(chw)
 
@@ -785,6 +785,16 @@ class RGBTCCDset(torch.utils.data.Dataset):
             rgb_np, t_np, pts_xy=pts, crop_h=self.crop_h, crop_w=self.crop_w,
             deterministic=self.deterministic, is_train=self.is_train
         )
+
+        if (rgb_np.shape[0] != self.crop_h) or (rgb_np.shape[1] != self.crop_w):
+            rgb_np = _pad_to_min_size(rgb_np, self.crop_h, self.crop_w)
+            rgb_np = rgb_np[: self.crop_h, : self.crop_w, :]
+        if (t_np.shape[0] != self.crop_h) or (t_np.shape[1] != self.crop_w):
+            t_np = _pad_to_min_size(t_np, self.crop_h, self.crop_w)
+            if t_np.ndim == 2:
+                t_np = t_np[: self.crop_h, : self.crop_w]
+            else:
+                t_np = t_np[: self.crop_h, : self.crop_w, :]
 
         rgb_t = _normalize_imagenet(_to_chw_tensor_rgb(rgb_np))
 

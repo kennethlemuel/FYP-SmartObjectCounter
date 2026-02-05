@@ -368,9 +368,8 @@ def main() -> None:
     # Keep MSE over density maps; GT density is count-preserving (sum == number of points).
     def loss_fn(pred: torch.Tensor, gt: torch.Tensor, lambda_cnt: float = 1e-3) -> torch.Tensor:
         # Density-map MSE (mean) + optional count-level L1 on summed density.
-        pred = torch.nan_to_num(pred, nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
-        gt = torch.nan_to_num(gt, nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
-    
+        pred = torch.nan_to_num(pred, nan = 0.0, posinf = 0.0, neginf = 0.0)
+        gt = torch.nan_to_num(gt, nan = 0.0, posinf = 0.0, neginf = 0.0)
         den_loss = F.mse_loss(pred, gt, reduction = "mean")
     
         if lambda_cnt > 0.0:
