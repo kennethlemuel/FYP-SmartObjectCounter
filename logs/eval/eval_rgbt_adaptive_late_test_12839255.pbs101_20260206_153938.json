@@ -1,0 +1,19 @@
+{
+  "mode": "adaptive_late",
+  "split": "test",
+  "img_h": 768,
+  "img_w": 1024,
+  "out_stride": 8,
+  "sigma": 15.0,
+  "device": "cuda",
+  "seed": 0,
+  "deterministic": false,
+  "params_total": 32528773,
+  "params_trainable": 32528773,
+  "model_size_mb": 124.08742141723633,
+  "mae": 45.6763136202097,
+  "rmse": 64.86503855465936,
+  "num_images": 800,
+  "eval_ms_per_image": 25.393722581211478,
+  "eval_fps": 39.379811164035026
+}

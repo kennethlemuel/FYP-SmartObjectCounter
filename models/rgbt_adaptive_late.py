@@ -151,7 +151,8 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
 
         gate = self.gate(pred_rgb, pred_t)
         pred = gate * pred_rgb + (1.0 - gate) * pred_t
-        return F.softplus(pred)
+        return pred
+
 
     def forward_with_aux(self, x_rgb: torch.Tensor, x_t3: torch.Tensor):
         pred_rgb = self._maybe_resize(self.rgb_net(x_rgb))
@@ -161,7 +162,7 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
         pred_rgb, pred_t = self._apply_cal(pred_rgb, pred_t)
 
         gate, gate_aux = self.gate(pred_rgb, pred_t, return_aux = True)
-        pred = F.softplus(gate * pred_rgb + (1.0 - gate) * pred_t)
+        pred = gate * pred_rgb + (1.0 - gate) * pred_t
 
         aux = {
             "pred_rgb": pred_rgb,
