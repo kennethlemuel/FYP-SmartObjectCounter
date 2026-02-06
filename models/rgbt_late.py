@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from models.csrnet import CSRNet
 
 
@@ -33,7 +32,7 @@ class CSRNetRGBT_Late(nn.Module):
         super().__init__()
         self.rgb_net = CSRNet(load_imagenet = load_imagenet)
         self.t_net = CSRNet(load_imagenet = load_imagenet)
-        self.fuse = nn.Conv2d(2, 1, kernel_size = 1, bias = True)
+        self.fuse = nn.Conv2d(2, 1, kernel_size = 1, bias = False)
 
         nn.init.kaiming_normal_(self.fuse.weight, mode = "fan_out", nonlinearity = "relu")
         if self.fuse.bias is not None:
@@ -48,4 +47,4 @@ class CSRNetRGBT_Late(nn.Module):
 
         x = torch.cat([den_rgb, den_t], dim = 1)  # [B, 2, H', W']
         out = self.fuse(x)
-        return torch.relu(out)
+        return F.softplus(out)

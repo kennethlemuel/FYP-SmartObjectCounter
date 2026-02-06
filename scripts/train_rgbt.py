@@ -367,18 +367,18 @@ def main() -> None:
     # Loss
     # Keep MSE over density maps; GT density is count-preserving (sum == number of points).
     def loss_fn(pred: torch.Tensor, gt: torch.Tensor, lambda_cnt: float = 1e-3) -> torch.Tensor:
-        # Density-map MSE (mean) + optional count-level L1 on summed density.
         pred = torch.nan_to_num(pred, nan = 0.0, posinf = 0.0, neginf = 0.0)
         gt = torch.nan_to_num(gt, nan = 0.0, posinf = 0.0, neginf = 0.0)
-        den_loss = F.mse_loss(pred, gt, reduction = "mean")
-    
+        den_loss = F.mse_loss(pred, gt, reduction = "sum") / pred.shape[0]
+
         if lambda_cnt > 0.0:
-            pred_cnt = pred.sum(dim = (2, 3))
-            gt_cnt = gt.sum(dim = (2, 3))
+            pred_cnt = pred.sum(dim = (-2, -1))
+            gt_cnt = gt.sum(dim = (-2, -1))
             cnt_loss = F.l1_loss(pred_cnt, gt_cnt, reduction = "mean")
-            return den_loss + (lambda_cnt * cnt_loss)
-    
+            return den_loss + lambda_cnt * cnt_loss
+
         return den_loss
+
     
     scaler = GradScaler(enabled = bool(args.amp))
 

@@ -96,9 +96,8 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
         self.use_calibration = bool(use_calibration)
         if self.use_calibration:
             # These names match your checkpoint keys: rgb_cal.*, t_cal.*
-            self.rgb_cal = nn.Conv2d(1, 1, kernel_size = 1, bias = True)
-            self.t_cal = nn.Conv2d(1, 1, kernel_size = 1, bias = True)
-
+            self.rgb_cal = nn.Conv2d(1, 1, 1, bias = False)
+            self.t_cal = nn.Conv2d(1, 1, 1, bias = False)
             with torch.no_grad():
                 self.rgb_cal.weight.fill_(1.0)
                 self.rgb_cal.bias.zero_()
@@ -153,7 +152,7 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
 
         gate = self.gate(pred_rgb, pred_t)
         pred = gate * pred_rgb + (1.0 - gate) * pred_t
-        return torch.relu(pred)
+        return F.softplus(pred)
 
     def forward_with_aux(self, x_rgb: torch.Tensor, x_t3: torch.Tensor):
         pred_rgb = self._maybe_resize(self.rgb_net(x_rgb))
@@ -163,7 +162,7 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
         pred_rgb, pred_t = self._apply_cal(pred_rgb, pred_t)
 
         gate, gate_aux = self.gate(pred_rgb, pred_t, return_aux = True)
-        pred = torch.relu(gate * pred_rgb + (1.0 - gate) * pred_t)
+        pred = F.softplus(gate * pred_rgb + (1.0 - gate) * pred_t)
 
         aux = {
             "pred_rgb": pred_rgb,

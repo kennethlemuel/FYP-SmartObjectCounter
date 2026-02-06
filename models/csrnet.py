@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision.models import vgg16, VGG16_Weights
 
 class CSRNet(nn.Module):
@@ -16,7 +17,7 @@ class CSRNet(nn.Module):
             nn.Conv2d(256, 128, 3, padding = 2, dilation = 2), nn.ReLU(inplace = True),
             nn.Conv2d(128, 64, 3, padding = 2, dilation = 2), nn.ReLU(inplace = True),
         )
-        self.output_layer = nn.Conv2d(64, 1, 1)
+        self.output_layer = nn.Conv2d(64, 1, 1, bias = False)
         for m in list(self.backend.modules()) + [self.output_layer]:
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode = 'fan_out', nonlinearity = 'relu')
@@ -27,6 +28,7 @@ class CSRNet(nn.Module):
         x = self.frontend(x)
         x = self.backend(x)
         x = self.output_layer(x)
-        x = torch.relu(x)
+        x = F.softplus(x)
         return x
+
         
