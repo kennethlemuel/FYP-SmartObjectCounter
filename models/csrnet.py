@@ -30,5 +30,3 @@ class CSRNet(nn.Module):
         x = self.output_layer(x)
         x = F.softplus(x)
         return x
-
-        

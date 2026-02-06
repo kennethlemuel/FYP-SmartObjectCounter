@@ -2,13 +2,13 @@ __pycache__/
 *.pth
 *.pt
 outputs/
-data/
+data
 .ipynb_checkpoints/
 .venv/
+venv/
 runs/
 Thumbs.db
 .DS_Store
 .vscode/
 *.o*
 *.e*
-venv/
