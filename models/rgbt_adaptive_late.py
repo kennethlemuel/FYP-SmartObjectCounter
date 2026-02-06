@@ -95,9 +95,8 @@ class CSRNetRGBT_AdaptiveLate(nn.Module):
 
         self.use_calibration = bool(use_calibration)
         if self.use_calibration:
-            # These names match your checkpoint keys: rgb_cal.*, t_cal.*
-            self.rgb_cal = nn.Conv2d(1, 1, 1, bias = False)
-            self.t_cal = nn.Conv2d(1, 1, 1, bias = False)
+            self.rgb_cal = nn.Conv2d(1, 1, 1, bias = True)
+            self.t_cal = nn.Conv2d(1, 1, 1, bias = True)
             with torch.no_grad():
                 self.rgb_cal.weight.fill_(1.0)
                 self.rgb_cal.bias.zero_()
