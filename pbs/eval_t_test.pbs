@@ -19,17 +19,15 @@ echo "[log] ${LOG_FILE}"
 
 MODE="t"
 CKPT_FALLBACK="${REPO}/outputs/t_e100_count_ema/ckpt_best.pt"
-CKPT_TRAIN_DIR="${REPO}/outputs/train_t_e100_sanity"
 DATA_ROOT="${REPO}/data/RGBT-CC-CVPR2021"
 IMG_H=768
 IMG_W=1024
 
 CKPT="${CKPT_OVERRIDE:-}"
 if [ -z "${CKPT}" ]; then
-  LATEST_RUN_DIR="$(ls -1dt "${CKPT_TRAIN_DIR}"/* 2>/dev/null | head -n 1 || true)"
-  if [ -n "${LATEST_RUN_DIR}" ] && [ -f "${LATEST_RUN_DIR}/best.pth" ]; then
-    CKPT="${LATEST_RUN_DIR}/best.pth"
-  else
+  # Pick latest sanity/full run automatically (e.g., train_t_e100_sanity, train_t_e400).
+  CKPT="$(ls -1t "${REPO}"/outputs/train_t_e*/*/best.pth 2>/dev/null | head -n 1 || true)"
+  if [ -z "${CKPT}" ]; then
     CKPT="${CKPT_FALLBACK}"
   fi
 fi
