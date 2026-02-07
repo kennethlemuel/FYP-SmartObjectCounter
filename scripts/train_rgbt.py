@@ -391,10 +391,22 @@ def main() -> None:
         if gate_module is None:
             raise AttributeError("CSRNetRGBT_AdaptiveLate must expose a gate module as .gate or .gate_net")
         gate_params = list(gate_module.parameters())
+        # Calibration layers are part of adaptive fusion and must be optimized.
+        cal_params = []
+        for cal_name in ("rgb_cal", "t_cal"):
+            cal_mod = getattr(model, cal_name, None)
+            if cal_mod is not None:
+                cal_params.extend(list(cal_mod.parameters()))
+        adaptive_head_params = gate_params + cal_params
         params = [
             {"params": backbone_params, "lr": args.lr},
-            {"params": gate_params, "lr": args.gate_lr},
+            {"params": adaptive_head_params, "lr": args.gate_lr},
         ]
+        print(
+            f"[init] adaptive optimizer groups: "
+            f"backbone_params={sum(p.numel() for p in backbone_params)} "
+            f"head_params={sum(p.numel() for p in adaptive_head_params)}"
+        )
     else:
         params = model.parameters()
 
