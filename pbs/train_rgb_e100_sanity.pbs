@@ -52,6 +52,7 @@ WEIGHT_DECAY=1e-4
 CROP_SIZE=224
 SIGMA=15.0
 DOWN=8
+LAMBDA_CNT=1e-2
 
 python3 -u scripts/train_rgbt.py \
   --mode rgb \
@@ -66,4 +67,5 @@ python3 -u scripts/train_rgbt.py \
   --crop_size "${CROP_SIZE}" \
   --sigma "${SIGMA}" \
   --down "${DOWN}" \
+  --lambda_cnt "${LAMBDA_CNT}" \
   --val_deterministic
