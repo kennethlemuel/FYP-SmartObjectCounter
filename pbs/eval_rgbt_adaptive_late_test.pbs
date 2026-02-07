@@ -18,10 +18,21 @@ exec > "${LOG_FILE}" 2>&1
 echo "[log] ${LOG_FILE}"
 
 MODE="adaptive_late"
-CKPT="${REPO}/outputs/rgbt_adaptive_late_e100_count_ema/ckpt_best.pt"
+CKPT_FALLBACK="${REPO}/outputs/rgbt_adaptive_late_e100_count_ema/ckpt_best.pt"
+CKPT_TRAIN_DIR="${REPO}/outputs/train_rgbt_adaptive_late_e100_sanity"
 DATA_ROOT="${REPO}/data/RGBT-CC-CVPR2021"
 IMG_H=768
 IMG_W=1024
+
+CKPT="${CKPT_OVERRIDE:-}"
+if [ -z "${CKPT}" ]; then
+  LATEST_RUN_DIR="$(ls -1dt "${CKPT_TRAIN_DIR}"/* 2>/dev/null | head -n 1 || true)"
+  if [ -n "${LATEST_RUN_DIR}" ] && [ -f "${LATEST_RUN_DIR}/best.pth" ]; then
+    CKPT="${LATEST_RUN_DIR}/best.pth"
+  else
+    CKPT="${CKPT_FALLBACK}"
+  fi
+fi
 
 echo "[repo] ${REPO}"
 echo "[mode] ${MODE}"
