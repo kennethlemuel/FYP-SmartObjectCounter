@@ -76,7 +76,7 @@ def build_crop_density_from_points(pts_out, y0, y1, x0, x1, out_stride, sigma, h
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices = ["rgb", "t", "early", "late", "adaptive_late"], required = True)
+    ap.add_argument("--mode", choices = ["rgb", "t", "base", "early", "late", "adaptive_late"], required = True)
     ap.add_argument("--data_root", required = True)
     ap.add_argument("--split", default = "train")
     ap.add_argument("--img_h", type = int, default = 768)
@@ -96,7 +96,7 @@ def main():
         ds = RGBTCC_RGBDataset(args.data_root, args.split, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
     elif args.mode == "t":
         ds = RGBTCC_TDataset(args.data_root, args.split, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
-    elif args.mode == "early":
+    elif args.mode in ["early", "base"]:
         ds = RGBTCC_EarlyFusionDataset(args.data_root, args.split, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
     else:
         ds = RGBTCC_PairedDataset(args.data_root, args.split, img_size, args.sigma, return_pts = True, out_stride = args.out_stride)
@@ -111,7 +111,7 @@ def main():
         if args.mode in ["late", "adaptive_late"]:
             x_rgb, x_t3, den_full, pts_out, name, gt_count = sample
             _, h, w = x_rgb.shape
-        elif args.mode == "early":
+        elif args.mode in ["early", "base"]:
             x4, den_full, pts_out, name, gt_count = sample
             _, h, w = x4.shape
         else:

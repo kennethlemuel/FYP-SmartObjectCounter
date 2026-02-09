@@ -848,3 +848,22 @@ class RGBTCC_TDset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         _rgb_t, t_t, den_t, image_id, gt_count = self.paired[idx]
         return t_t, den_t, image_id, gt_count
+
+
+class RGBTCC_RGBTBaseDset(torch.utils.data.Dataset):
+    """
+    Crop-based RGBT dataset that returns a single 4-channel tensor:
+    RGB (3ch, ImageNet norm) + Thermal (1ch, ImageNet-mean/std on gray).
+    """
+    def __init__(self, base, crop_size: int = 224, sigma: float = 15.0, down: int = 8, is_train: bool = True, deterministic: bool = False):
+        self.paired = RGBTCCDset(base, crop_size=crop_size, sigma=sigma, down=down, is_train=is_train, deterministic=deterministic)
+
+    def __len__(self):
+        return len(self.paired)
+
+    def __getitem__(self, idx: int):
+        rgb_t, t_t, den_t, image_id, gt_count = self.paired[idx]
+        # Use the first channel from the normalized T tensor as the thermal channel (1xHxW).
+        t1 = t_t[:1, :, :]
+        x4 = torch.cat([rgb_t, t1], dim = 0).contiguous()
+        return x4, den_t, image_id, gt_count

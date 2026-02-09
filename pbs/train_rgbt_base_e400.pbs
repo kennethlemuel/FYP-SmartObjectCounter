@@ -1,0 +1,71 @@
+#!/bin/bash
+#PBS -N train_rgbt_base_e400
+#PBS -P personal-kenneth0
+#PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
+#PBS -l walltime=12:00:00
+#PBS -j oe
+
+set -euo pipefail
+umask 0022
+
+# Prefer the directory you qsub from if it contains this repo; otherwise use the default scratch repo path.
+REPO_DEFAULT="/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter"
+REPO="${REPO_DEFAULT}"
+if [ -n "${PBS_O_WORKDIR:-}" ] && [ -f "${PBS_O_WORKDIR}/scripts/train_rgbt.py" ]; then
+  REPO="${PBS_O_WORKDIR}"
+fi
+
+LOG_DIR="${REPO}/logs"
+DATA_ROOT="${REPO}/data/RGBT-CC-CVPR2021"
+
+: "${PBS_JOBID:=manual}"
+: "${PBS_JOBNAME:=train_rgbt_base_e400}"
+
+TS="$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="${LOG_DIR}/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.log"
+OUT_DIR="${REPO}/outputs/${PBS_JOBNAME}/${PBS_JOBID}_${TS}"
+
+mkdir -p "${LOG_DIR}" "${OUT_DIR}"
+cd "${REPO}"
+
+exec > "${LOG_FILE}" 2>&1
+echo "[log] ${LOG_FILE}"
+echo "[job] name=${PBS_JOBNAME} id=${PBS_JOBID} host=$(hostname) time=$(date)"
+
+module purge
+module load pytorch/2.6.0-py3-cu11.8
+
+python3 - <<'PY'
+import torch
+print("torch", torch.__version__, "cuda", torch.cuda.is_available())
+PY
+
+export PYTHONUNBUFFERED=1
+export PYTHONPATH="${REPO}:${PYTHONPATH:-}"
+
+EPOCHS=400
+BATCH_SIZE=1
+WORKERS=4
+SEED=0
+LR=1e-5
+WEIGHT_DECAY=1e-4
+CROP_SIZE=224
+SIGMA=15.0
+DOWN=8
+LAMBDA_CNT=1e-2
+
+python3 -u scripts/train_rgbt.py \
+  --mode base \
+  --data_root "${DATA_ROOT}" \
+  --out_dir "${OUT_DIR}" \
+  --epochs "${EPOCHS}" \
+  --batch_size "${BATCH_SIZE}" \
+  --workers "${WORKERS}" \
+  --seed "${SEED}" \
+  --lr "${LR}" \
+  --weight_decay "${WEIGHT_DECAY}" \
+  --crop_size "${CROP_SIZE}" \
+  --sigma "${SIGMA}" \
+  --down "${DOWN}" \
+  --lambda_cnt "${LAMBDA_CNT}" \
+  --val_deterministic

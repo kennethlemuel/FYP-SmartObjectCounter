@@ -15,6 +15,7 @@ from datasets.rgbt_cc import (
     RGBTCCDset,
     RGBTCC_RGBDset,
     RGBTCC_TDset,
+    RGBTCC_RGBTBaseDset,
     RGBTCC_RGBDataset,
     RGBTCC_TDataset,
     RGBTCC_PairedDataset,
@@ -22,6 +23,7 @@ from datasets.rgbt_cc import (
 )
 
 from models.csrnet import CSRNet
+from models.rgbt_base import CSRNetRGBT_Base
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
 from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
@@ -181,7 +183,7 @@ def main() -> None:
     ap.add_argument("--data_root", type = str, required = True)
     ap.add_argument("--out_dir", type = str, required = True)
 
-    ap.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "early", "late", "adaptive_late"])
+    ap.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "base", "early", "late", "adaptive_late"])
     ap.add_argument("--epochs", type = int, default = 100)
     ap.add_argument("--batch_size", type = int, default = 1)
     ap.add_argument("--workers", type = int, default = 4)
@@ -269,6 +271,23 @@ def main() -> None:
             is_train = False,
             deterministic = True,
         )
+    elif args.mode == "base":
+        ds_train = RGBTCC_RGBTBaseDset(
+            base_train,
+            crop_size = args.crop_size,
+            sigma = args.sigma,
+            down = args.down,
+            is_train = True,
+            deterministic = is_train_det,
+        )
+        ds_val = RGBTCC_RGBTBaseDset(
+            base_val,
+            crop_size = args.crop_size,
+            sigma = args.sigma,
+            down = args.down,
+            is_train = False,
+            deterministic = True,
+        )
     else:
         # early / late / adaptive_late train on paired crops
         ds_train = RGBTCCDset(
@@ -319,6 +338,8 @@ def main() -> None:
         model = CSRNet(load_imagenet = True).to(device)
     elif args.mode == "t":
         model = CSRNet(load_imagenet = True).to(device)
+    elif args.mode == "base":
+        model = CSRNetRGBT_Base(load_imagenet = True).to(device)
     elif args.mode == "early":
         model = CSRNetRGBT_Early(load_imagenet = True).to(device)
     elif args.mode == "late":

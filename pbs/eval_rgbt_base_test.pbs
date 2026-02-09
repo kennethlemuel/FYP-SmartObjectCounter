@@ -1,0 +1,67 @@
+#!/bin/bash
+#PBS -N eval_rgbt_base_test
+#PBS -P personal-kenneth0
+#PBS -l select=1:ngpus=1:ncpus=16:mem=70gb
+#PBS -l walltime=02:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+LOG_DIR="${REPO}/logs/eval"
+mkdir -p "${LOG_DIR}"
+cd "${REPO}" || exit 1
+
+TS=$(date +%Y%m%d_%H%M%S)
+LOG_FILE="${LOG_DIR}/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.log"
+exec > "${LOG_FILE}" 2>&1
+echo "[log] ${LOG_FILE}"
+
+MODE="base"
+CKPT_FALLBACK="${REPO}/outputs/train_rgbt_base_e100_sanity/ckpt_best.pt"
+DATA_ROOT="${REPO}/data/RGBT-CC-CVPR2021"
+IMG_H=768
+IMG_W=1024
+
+CKPT="${CKPT_OVERRIDE:-}"
+if [ -z "${CKPT}" ]; then
+  # Pick latest sanity/full run automatically (e.g., train_rgbt_base_e100_sanity, train_rgbt_base_e400).
+  CKPT="$(ls -1t "${REPO}"/outputs/train_rgbt_base_e*/*/best.pth 2>/dev/null | head -n 1 || true)"
+  if [ -z "${CKPT}" ]; then
+    CKPT="${CKPT_FALLBACK}"
+  fi
+fi
+
+echo "[repo] ${REPO}"
+echo "[mode] ${MODE}"
+echo "[ckpt] ${CKPT}"
+echo "[data] ${DATA_ROOT}"
+echo "[img] ${IMG_H}x${IMG_W}"
+
+module purge
+module load pytorch/2.6.0-py3-cu11.8
+module list
+
+export PYTHONPATH="${REPO}${PYTHONPATH:+:${PYTHONPATH}}"
+
+command -v python3
+python3 -c "import torch; print('python ok'); print('torch:', torch.__version__, 'cuda:', torch.version.cuda, 'cuda_available:', torch.cuda.is_available())"
+
+test -f "${CKPT}"
+test -d "${DATA_ROOT}"
+
+OUT_JSON="${LOG_DIR}/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.json"
+
+python3 -u scripts/eval_rgbt.py \
+  --root "${DATA_ROOT}" \
+  --split test \
+  --mode "${MODE}" \
+  --ckpt "${CKPT}" \
+  --img_h "${IMG_H}" \
+  --img_w "${IMG_W}" \
+  --out_stride 8 \
+  --sigma 15.0 \
+  --batch_size 1 \
+  --num_workers 4 \
+  --device cuda \
+  --out_json "${OUT_JSON}"
