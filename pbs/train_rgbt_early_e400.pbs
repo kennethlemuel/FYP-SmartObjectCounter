@@ -48,7 +48,8 @@ BATCH_SIZE=1
 WORKERS=4
 SEED=0
 LR=1e-5
-WEIGHT_DECAY=1e-4
+MAX_LR=5e-5
+WEIGHT_DECAY=5e-4
 CROP_SIZE=224
 SIGMA=15.0
 DOWN=8
@@ -64,8 +65,13 @@ python3 -u scripts/train_rgbt.py \
   --seed "${SEED}" \
   --lr "${LR}" \
   --weight_decay "${WEIGHT_DECAY}" \
+  --use_onecycle \
+  --max_lr "${MAX_LR}" \
   --crop_size "${CROP_SIZE}" \
   --sigma "${SIGMA}" \
   --down "${DOWN}" \
   --lambda_cnt "${LAMBDA_CNT}" \
+  --val_fullres \
+  --val_img_h 768 \
+  --val_img_w 1024 \
   --val_deterministic

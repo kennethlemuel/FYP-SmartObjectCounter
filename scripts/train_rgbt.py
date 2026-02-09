@@ -19,6 +19,7 @@ from datasets.rgbt_cc import (
     RGBTCC_RGBDataset,
     RGBTCC_TDataset,
     RGBTCC_PairedDataset,
+    RGBTCC_EarlyFusionDataset,
     build_splits_rgbt_cc,
 )
 
@@ -213,6 +214,9 @@ def main() -> None:
     ap.add_argument("--crop_size", type = int, default = 224)
     ap.add_argument("--sigma", type = float, default = 15.0)
     ap.add_argument("--down", type = int, default = 8)
+    ap.add_argument("--val_fullres", action = "store_true", help = "Validate on full-res images (uses RGBT-CC val/test split).")
+    ap.add_argument("--val_img_h", type = int, default = 768)
+    ap.add_argument("--val_img_w", type = int, default = 1024)
 
     args = ap.parse_args()
 
@@ -320,6 +324,51 @@ def main() -> None:
         worker_init_fn = seed_worker,
         generator = g,
     )
+    # Optional: override validation with full-resolution images for better val/test alignment.
+    if args.val_fullres:
+        val_split = "val"
+        if not (Path(args.data_root) / "val").exists():
+            val_split = "test"
+
+        img_size = (int(args.val_img_h), int(args.val_img_w))
+        if args.mode == "rgb":
+            ds_val = RGBTCC_RGBDataset(
+                root = args.data_root,
+                split = val_split,
+                img_size = img_size,
+                out_stride = args.down,
+                sigma = args.sigma,
+                return_pts = False,
+            )
+        elif args.mode == "t":
+            ds_val = RGBTCC_TDataset(
+                root = args.data_root,
+                split = val_split,
+                img_size = img_size,
+                out_stride = args.down,
+                sigma = args.sigma,
+                return_pts = False,
+            )
+        elif args.mode == "base":
+            ds_val = RGBTCC_EarlyFusionDataset(
+                root = args.data_root,
+                split = val_split,
+                img_size = img_size,
+                out_stride = args.down,
+                sigma = args.sigma,
+                return_pts = False,
+            )
+        else:
+            ds_val = RGBTCC_PairedDataset(
+                root = args.data_root,
+                split = val_split,
+                img_size = img_size,
+                out_stride = args.down,
+                sigma = args.sigma,
+                return_pts = False,
+            )
+        print(f"[init] val_fullres = True (split={val_split}, img={img_size[0]}x{img_size[1]})")
+
     dl_val = torch.utils.data.DataLoader(
         ds_val,
         batch_size = 1,
