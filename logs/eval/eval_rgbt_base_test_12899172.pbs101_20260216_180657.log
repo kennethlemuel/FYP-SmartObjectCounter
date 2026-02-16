@@ -1,0 +1,32 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/eval/eval_rgbt_base_test_12899172.pbs101_20260216_180657.log
+[repo] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+[mode] base
+[ckpt] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/train_rgbt_base_e400/12850187.pbs101_20260209_154137/best.pth
+[data] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/data/RGBT-CC-CVPR2021
+[img] 768x1024
+Currently Loaded Modulefiles:
+  1) python/3.13.3-gcc11        3) craype-accel-nvidia80
+  2) cuda/11.8.0                4) pytorch/2.6.0-py3-cu11.8
+/app/apps/python/3.13.3-gcc11/bin/python3
+python ok
+torch: 2.6.0+cu118 cuda: 11.8 cuda_available: True
+{
+  "mode": "base",
+  "split": "test",
+  "img_h": 768,
+  "img_w": 1024,
+  "out_stride": 8,
+  "sigma": 15.0,
+  "device": "cuda",
+  "seed": 0,
+  "deterministic": false,
+  "params_total": 16264064,
+  "params_trainable": 16264064,
+  "model_size_mb": 62.04248046875,
+  "mae": 31.48597047686577,
+  "rmse": 58.46340490044454,
+  "num_images": 800,
+  "eval_ms_per_image": 11.124018235132098,
+  "eval_fps": 89.89557360143297
+}
+[OK] Wrote metrics to: /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/eval/eval_rgbt_base_test_12899172.pbs101_20260216_180657.json
