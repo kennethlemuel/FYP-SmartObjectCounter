@@ -130,6 +130,35 @@ def load_backbone(net: nn.Module, ckpt_path: str, prefix: str):
     print(f"[init] warm-start {prefix} from {ckpt_path} (missing={len(res.missing_keys)} unexpected={len(res.unexpected_keys)})")
 
 
+class EMA:
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = float(decay)
+        self.shadow = {}
+        self.backup = {}
+        for name, p in model.named_parameters():
+            if p.requires_grad:
+                self.shadow[name] = p.detach().clone()
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        for name, p in model.named_parameters():
+            if name in self.shadow:
+                self.shadow[name].mul_(self.decay).add_(p.detach(), alpha = 1.0 - self.decay)
+
+    def apply_to(self, model: nn.Module) -> None:
+        self.backup = {}
+        for name, p in model.named_parameters():
+            if name in self.shadow:
+                self.backup[name] = p.detach().clone()
+                p.data.copy_(self.shadow[name])
+
+    def restore(self, model: nn.Module) -> None:
+        for name, p in model.named_parameters():
+            if name in self.backup:
+                p.data.copy_(self.backup[name])
+        self.backup = {}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_root", type = str, required = True)
@@ -165,6 +194,8 @@ def main() -> None:
     ap.add_argument("--val_img_w", type = int, default = 1024)
     ap.add_argument("--modality_dropout", action = "store_true")
     ap.add_argument("--mdrop_prob", type = float, default = 0.1)
+    ap.add_argument("--ema", action = "store_true")
+    ap.add_argument("--ema_decay", type = float, default = 0.999)
 
     args = ap.parse_args()
 
@@ -237,6 +268,7 @@ def main() -> None:
     print(f"[init] train = {len(ds_train)}  val = {len(ds_val)}  workers = {args.workers}")
 
     model = AdaptiveFPNRGBT(load_imagenet = True).to(device)
+    ema = EMA(model, decay = args.ema_decay) if args.ema else None
 
     if args.init_rgb_ckpt:
         load_backbone(model.rgb, args.init_rgb_ckpt, "rgb.")
@@ -328,6 +360,9 @@ def main() -> None:
                 else:
                     opt.step()
 
+                if ema is not None:
+                    ema.update(model)
+
                 opt.zero_grad(set_to_none = True)
                 if sch is not None:
                     sch.step()
@@ -338,7 +373,13 @@ def main() -> None:
                 print(f"[e{ep:03d} s{step:04d}/{len(dl_train)}] loss = {running / step:.6f}")
 
         train_loss = running / max(1, step)
-        metrics = eval_one_epoch(model, dl_val, device, amp = bool(args.amp))
+        if ema is not None:
+            ema.apply_to(model)
+            metrics = eval_one_epoch(model, dl_val, device, amp = bool(args.amp))
+            ema.restore(model)
+        else:
+            metrics = eval_one_epoch(model, dl_val, device, amp = bool(args.amp))
+
         mae = metrics["mae"]
         rmse = metrics["rmse"]
         g1 = metrics["game1"]
@@ -364,6 +405,10 @@ def main() -> None:
         torch.save(ckpt, last_path)
         if mae < best_mae:
             best_mae = mae
+            if ema is not None:
+                ema.apply_to(model)
+                ckpt["model"] = model.state_dict()
+                ema.restore(model)
             torch.save(ckpt, best_path)
 
     print(f"[done] best_mae = {best_mae:.3f}  best_path = {best_path}")

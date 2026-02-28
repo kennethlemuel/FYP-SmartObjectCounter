@@ -47,12 +47,49 @@ BATCH_SIZE=1
 WORKERS=4
 SEED=0
 LR=1e-5
-MAX_LR=1e-4
+MAX_LR=5e-5
 WEIGHT_DECAY=1e-4
 CROP_SIZE=224
 SIGMA=15.0
 DOWN=8
 LAMBDA_CNT=1e-2
+MDROP_PROB=0.05
+FREEZE_EPOCHS=3
+EMA_DECAY=0.999
+
+# Auto-pick latest RGB/T checkpoints for warm-start (if available).
+mapfile -t WARM < <(python3 - <<'PY'
+import os
+import glob
+
+root = os.environ.get("REPO", "")
+def newest(pattern: str) -> str:
+    paths = glob.glob(pattern)
+    if not paths:
+        return ""
+    paths.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return paths[0]
+
+print(newest(os.path.join(root, "outputs", "train_rgb_*", "*", "best.pth")))
+print(newest(os.path.join(root, "outputs", "train_t_*", "*", "best.pth")))
+PY
+)
+LATEST_RGB_CKPT="${WARM[0]:-}"
+LATEST_T_CKPT="${WARM[1]:-}"
+
+EXTRA_ARGS=()
+if [ -n "${LATEST_RGB_CKPT}" ]; then
+  echo "[init] warm-start rgb = ${LATEST_RGB_CKPT}"
+  EXTRA_ARGS+=(--init_rgb_ckpt "${LATEST_RGB_CKPT}")
+else
+  echo "[init] warm-start rgb = NONE"
+fi
+if [ -n "${LATEST_T_CKPT}" ]; then
+  echo "[init] warm-start t = ${LATEST_T_CKPT}"
+  EXTRA_ARGS+=(--init_t_ckpt "${LATEST_T_CKPT}")
+else
+  echo "[init] warm-start t = NONE"
+fi
 
 python3 -u scripts_v2/train_rgbt_adaptive_fpn.py \
   --data_root "${DATA_ROOT}" \
@@ -70,7 +107,13 @@ python3 -u scripts_v2/train_rgbt_adaptive_fpn.py \
   --down "${DOWN}" \
   --lambda_cnt "${LAMBDA_CNT}" \
   --modality_dropout \
-  --mdrop_prob 0.2 \
+  --mdrop_prob "${MDROP_PROB}" \
+  --freeze_backbones_epochs "${FREEZE_EPOCHS}" \
+  --ema \
+  --ema_decay "${EMA_DECAY}" \
+  --clip_grad 1.0 \
+  --deterministic \
   --val_fullres \
   --val_img_h 768 \
-  --val_img_w 1024
+  --val_img_w 1024 \
+  "${EXTRA_ARGS[@]}"

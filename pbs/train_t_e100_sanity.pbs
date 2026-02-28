@@ -71,4 +71,6 @@ python3 -u scripts/train_rgbt.py \
   --sigma "${SIGMA}" \
   --down "${DOWN}" \
   --lambda_cnt "${LAMBDA_CNT}" \
+  --clip_grad 1.0 \
+  --deterministic \
   --val_deterministic
