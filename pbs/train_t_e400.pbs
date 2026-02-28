@@ -40,6 +40,7 @@ import torch
 print("torch", torch.__version__, "cuda", torch.cuda.is_available())
 PY
 
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="${REPO}:${PYTHONPATH:-}"
 
