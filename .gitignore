@@ -1,6 +1,4 @@
 __pycache__/
-*.pth
-*.pt
 data
 .ipynb_checkpoints/
 .venv/
