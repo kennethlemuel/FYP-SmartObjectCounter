@@ -1,0 +1,122 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_fpn_e400_13018773.pbs101_20260301_125947.log
+[job] name=train_rgbt_adaptive_fpn_e400 id=13018773.pbs101 host=x1000c3s1b0n0 time=Sun Mar  1 12:59:47 +08 2026
+torch 2.6.0+cu118 cuda True
+[init] warm-start rgb = outputs/train_rgb_e400/13008785.pbs101_20260228_144230/best.pth
+[init] warm-start t = outputs/train_t_e400/13008786.pbs101_20260228_144232/best.pth
+[init] device = cuda
+[init] val_fullres = True (split=val, img=768x1024)
+[init] train = 1030  val = 200  workers = 4
+[init] warm-start rgb. from outputs/train_rgb_e400/13008785.pbs101_20260228_144230/best.pth (missing=265 unexpected=33)
+[init] warm-start t. from outputs/train_t_e400/13008786.pbs101_20260228_144232/best.pth (missing=265 unexpected=33)
+/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts_v2/train_rgbt_adaptive_fpn.py:289: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = GradScaler(enabled = bool(args.amp))
+[e001 s0001/1030] loss = 678480.562500
+[e001 s0050/1030] loss = 75799.780671
+[e001 s0100/1030] loss = 37917.392307
+[e001 s0150/1030] loss = 25278.976195
+[e001 s0200/1030] loss = 18959.947353
+[e001 s0250/1030] loss = 15169.200670
+[e001 s0300/1030] loss = 12641.458574
+[e001 s0350/1030] loss = 10836.350367
+[e001 s0400/1030] loss = 9482.345887
+[e001 s0450/1030] loss = 8429.984663
+[e001 s0500/1030] loss = 7587.287510
+[e001 s0550/1030] loss = 6897.773000
+[e001 s0600/1030] loss = 6323.278756
+[e001 s0650/1030] loss = 5837.150087
+[e001 s0700/1030] loss = 5420.550744
+[e001 s0750/1030] loss = 5059.499644
+[e001 s0800/1030] loss = 4743.549117
+[e001 s0850/1030] loss = 4464.889144
+[e001 s0900/1030] loss = 4217.080499
+[e001 s0950/1030] loss = 3995.561745
+[e001 s1000/1030] loss = 3795.992432
+Epoch 001: train_loss = 3685.568979  MAE/GAME0 = 60757.874  RMSE = 156521.565  GAME1 = 60776.063  GAME2 = 60814.789  GAME3 = 60847.102  lr = 5.07e-06  time = 44.8s
+[e002 s0001/1030] loss = 1.352047
+[e002 s0050/1030] loss = 2.918256
+[e002 s0100/1030] loss = 3.545696
+[e002 s0150/1030] loss = 3.726753
+[e002 s0200/1030] loss = 3.551983
+[e002 s0250/1030] loss = 3.437447
+[e002 s0300/1030] loss = 3.739152
+[e002 s0350/1030] loss = 4.893963
+[e002 s0400/1030] loss = 4.962709
+[e002 s0450/1030] loss = 5.446415
+[e002 s0500/1030] loss = 5.233809
+[e002 s0550/1030] loss = 5.140287
+[e002 s0600/1030] loss = 5.074208
+[e002 s0650/1030] loss = 4.947972
+[e002 s0700/1030] loss = 4.928376
+[e002 s0750/1030] loss = 4.797433
+[e002 s0800/1030] loss = 4.747333
+[e002 s0850/1030] loss = 4.707048
+[e002 s0900/1030] loss = 4.620787
+[e002 s0950/1030] loss = 4.583132
+[e002 s1000/1030] loss = 4.676412
+Epoch 002: train_loss = 4.629291  MAE/GAME0 = 27406.198  RMSE = 100911.980  GAME1 = 27430.491  GAME2 = 27469.865  GAME3 = 27502.782  lr = 5.28e-06  time = 38.4s
+[e003 s0001/1030] loss = 1.585050
+[e003 s0050/1030] loss = 2.949060
+[e003 s0100/1030] loss = 3.263509
+[e003 s0150/1030] loss = 5.508385
+[e003 s0200/1030] loss = 7.677855
+[e003 s0250/1030] loss = 6.693478
+[e003 s0300/1030] loss = 6.589845
+[e003 s0350/1030] loss = 5.906963
+[e003 s0400/1030] loss = 5.900769
+[e003 s0450/1030] loss = 5.652208
+[e003 s0500/1030] loss = 5.384045
+[e003 s0550/1030] loss = 5.119124
+[e003 s0600/1030] loss = 5.019788
+[e003 s0650/1030] loss = 4.907654
+[e003 s0700/1030] loss = 4.863479
+[e003 s0750/1030] loss = 4.874299
+[e003 s0800/1030] loss = 4.781010
+[e003 s0850/1030] loss = 4.723895
+[e003 s0900/1030] loss = 4.710059
+[e003 s0950/1030] loss = 4.685966
+[e003 s1000/1030] loss = 4.589074
+Epoch 003: train_loss = 4.629053  MAE/GAME0 = 46870.039  RMSE = 135231.070  GAME1 = 46892.004  GAME2 = 46930.099  GAME3 = 46965.544  lr = 5.62e-06  time = 38.6s
+[e004 s0001/1030] loss = 0.351566
+[e004 s0050/1030] loss = 3.791834
+[e004 s0100/1030] loss = 3.472015
+[e004 s0150/1030] loss = 3.570301
+[e004 s0200/1030] loss = 3.403159
+[e004 s0250/1030] loss = 3.350875
+[e004 s0300/1030] loss = 3.516151
+[e004 s0350/1030] loss = 4.946856
+[e004 s0400/1030] loss = 4.565584
+[e004 s0450/1030] loss = 4.569064
+[e004 s0500/1030] loss = 4.294999
+[e004 s0550/1030] loss = 4.214326
+[e004 s0600/1030] loss = 4.308848
+[e004 s0650/1030] loss = 4.345093
+[e004 s0700/1030] loss = 4.169979
+[e004 s0750/1030] loss = 4.205857
+[e004 s0800/1030] loss = 4.249911
+[e004 s0850/1030] loss = 4.692494
+[e004 s0900/1030] loss = 4.587671
+[e004 s0950/1030] loss = 4.756515
+[e004 s1000/1030] loss = 4.961786
+Epoch 004: train_loss = 5.015866  MAE/GAME0 = 7527.284  RMSE = 15794.733  GAME1 = 7568.898  GAME2 = 7610.054  GAME3 = 7632.164  lr = 6.10e-06  time = 67.2s
+[e005 s0001/1030] loss = 0.467377
+[e005 s0050/1030] loss = 2.381993
+[e005 s0100/1030] loss = 3.337475
+[e005 s0150/1030] loss = 3.777477
+[e005 s0200/1030] loss = 3.930043
+[e005 s0250/1030] loss = 4.527481
+[e005 s0300/1030] loss = 4.510635
+[e005 s0350/1030] loss = 4.282277
+[e005 s0400/1030] loss = 4.730811
+[e005 s0450/1030] loss = 4.615697
+[e005 s0500/1030] loss = 4.533022
+[e005 s0550/1030] loss = 4.572759
+[e005 s0600/1030] loss = 4.483604
+[e005 s0650/1030] loss = 5.056902
+[e005 s0700/1030] loss = 4.986151
+[e005 s0750/1030] loss = 5.066231
+[e005 s0800/1030] loss = 4.913168
+[e005 s0850/1030] loss = 4.881632
+[e005 s0900/1030] loss = 4.816940
+[e005 s0950/1030] loss = 4.705887
+[e005 s1000/1030] loss = 4.661498
+Epoch 005: train_loss = 4.631600  MAE/GAME0 = 3339.584  RMSE = 8464.495  GAME1 = 3383.946  GAME2 = 3420.568  GAME3 = 3438.539  lr = 6.71e-06  time = 67.4s
