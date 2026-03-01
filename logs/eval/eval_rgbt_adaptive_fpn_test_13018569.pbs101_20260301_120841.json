@@ -1,0 +1,19 @@
+{
+  "mode": "adaptive_fpn",
+  "split": "test",
+  "img_h": 768,
+  "img_w": 1024,
+  "out_stride": 8,
+  "sigma": 15.0,
+  "device": "cuda",
+  "seed": 0,
+  "deterministic": false,
+  "params_total": 49249668,
+  "params_trainable": 49249668,
+  "model_size_mb": 188.27865600585938,
+  "mae": 52.010686393976215,
+  "rmse": 89.39903774384875,
+  "num_images": 800,
+  "eval_ms_per_image": 24.889143861364573,
+  "eval_fps": 40.17815982623252
+}
