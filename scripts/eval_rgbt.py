@@ -26,6 +26,7 @@ from datasets.rgbt_cc import (
 
 #Models
 from models.csrnet import CSRNet
+from models.resnet_cc import ResNetCount
 from models.rgbt_base import CSRNetRGBT_Base
 try:
     from models.rgbt_early import CSRNetRGBT_EarlyFusion as CSRNetRGBT_Early
@@ -110,10 +111,10 @@ def load_checkpoint(model: torch.nn.Module, ckpt_path: str, device: torch.device
 def build_model(mode: str, load_imagenet: bool) -> torch.nn.Module:
     mode = mode.lower()
     if mode == "rgb":
-        return CSRNet(load_imagenet = load_imagenet)
+        return ResNetCount(load_imagenet = load_imagenet)
     if mode == "t":
         #Thermal is provided as 3-channel tensor (replicated) by the dataset loader.
-        return CSRNet(load_imagenet = load_imagenet)
+        return ResNetCount(load_imagenet = load_imagenet)
     if mode == "base":
         return CSRNetRGBT_Base(load_imagenet = load_imagenet)
     if mode == "early":

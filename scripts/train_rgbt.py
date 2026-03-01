@@ -24,6 +24,7 @@ from datasets.rgbt_cc import (
 )
 
 from models.csrnet import CSRNet
+from models.resnet_cc import ResNetCount
 from models.rgbt_base import CSRNetRGBT_Base
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
@@ -384,9 +385,9 @@ def main() -> None:
 
     # Model selection
     if args.mode == "rgb":
-        model = CSRNet(load_imagenet = True).to(device)
+        model = ResNetCount(load_imagenet = True).to(device)
     elif args.mode == "t":
-        model = CSRNet(load_imagenet = True).to(device)
+        model = ResNetCount(load_imagenet = True).to(device)
     elif args.mode == "base":
         model = CSRNetRGBT_Base(load_imagenet = True).to(device)
     elif args.mode == "early":
