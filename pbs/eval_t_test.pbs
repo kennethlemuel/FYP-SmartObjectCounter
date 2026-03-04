@@ -59,7 +59,7 @@ python3 -u scripts/eval_rgbt.py \
   --ckpt "${CKPT}" \
   --img_h "${IMG_H}" \
   --img_w "${IMG_W}" \
-  --out_stride 8 \
+  --out_stride 4 \
   --sigma 15.0 \
   --batch_size 1 \
   --num_workers 4 \

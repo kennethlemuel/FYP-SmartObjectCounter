@@ -63,7 +63,7 @@ class AdaptiveFPNRGBT(nn.Module):
         self.lat4 = nn.Conv2d(1024, fpn_channels, 1)
         self.lat5 = nn.Conv2d(2048, fpn_channels, 1)
 
-        self.out3 = nn.Sequential(
+        self.out2 = nn.Sequential(
             nn.Conv2d(fpn_channels, fpn_channels, 3, padding = 1),
             nn.ReLU(inplace = True),
             nn.Conv2d(fpn_channels, fpn_channels, 3, padding = 1),
@@ -75,7 +75,7 @@ class AdaptiveFPNRGBT(nn.Module):
             nn.init.kaiming_normal_(m.weight, mode = "fan_out", nonlinearity = "relu")
             if getattr(m, "bias", None) is not None:
                 nn.init.constant_(m.bias, 0.0)
-        for m in self.out3.modules():
+        for m in self.out2.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode = "fan_out", nonlinearity = "relu")
                 if m.bias is not None:
@@ -108,9 +108,7 @@ class AdaptiveFPNRGBT(nn.Module):
         p3 = self.lat3(f3) + F.interpolate(p4, size = f3.shape[-2:], mode = "bilinear", align_corners = False)
         p2 = self.lat2(f2) + F.interpolate(p3, size = f2.shape[-2:], mode = "bilinear", align_corners = False)
 
-        p2d = F.max_pool2d(p2, kernel_size = 2, stride = 2)
-        p3 = p3 + p2d
-
-        x = self.out3(p3)
+        # Predict density at stride 4 using p2 for higher-resolution output.
+        x = self.out2(p2)
         x = self.den(x)
         return F.softplus(x)

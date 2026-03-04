@@ -187,7 +187,7 @@ def main() -> None:
 
     ap.add_argument("--crop_size", type = int, default = 224)
     ap.add_argument("--sigma", type = float, default = 15.0)
-    ap.add_argument("--down", type = int, default = 8)
+    ap.add_argument("--down", type = int, default = 4)
 
     ap.add_argument("--val_fullres", action = "store_true")
     ap.add_argument("--val_img_h", type = int, default = 768)

@@ -141,7 +141,7 @@ def main() -> None:
 
     parser.add_argument("--img_h", type = int, default = 768)
     parser.add_argument("--img_w", type = int, default = 1024)
-    parser.add_argument("--out_stride", type = int, default = 8)
+    parser.add_argument("--out_stride", type = int, default = 4)
     parser.add_argument("--sigma", type = float, default = 15.0)
 
     parser.add_argument("--batch_size", type = int, default = 1)

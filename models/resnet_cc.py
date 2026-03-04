@@ -7,7 +7,7 @@ from torchvision.models import resnet50, ResNet50_Weights
 class ResNetCount(nn.Module):
     """
     ResNet-50 backbone with a lightweight density head.
-    Outputs density at stride 8 (c3 resolution), matching out_stride=8 targets.
+    Outputs density at stride 4 (c2 resolution), matching out_stride=4 targets.
     """
     def __init__(self, in_ch: int = 3, load_imagenet: bool = True, head_channels: int = 256):
         super().__init__()
@@ -44,9 +44,9 @@ class ResNetCount(nn.Module):
         self.layer3 = m.layer3
         self.layer4 = m.layer4
 
-        # Density head on c3 (stride 8)
+        # Density head on c2 (stride 4)
         self.head = nn.Sequential(
-            nn.Conv2d(512, head_channels, 3, padding = 1),
+            nn.Conv2d(256, head_channels, 3, padding = 1),
             nn.ReLU(inplace = True),
             nn.Conv2d(head_channels, head_channels, 3, padding = 1),
             nn.ReLU(inplace = True),
@@ -65,5 +65,5 @@ class ResNetCount(nn.Module):
         c3 = self.layer2(c2)
         c4 = self.layer3(c3)
         _c5 = self.layer4(c4)
-        den = self.head(c3)
+        den = self.head(c2)
         return F.softplus(den)
