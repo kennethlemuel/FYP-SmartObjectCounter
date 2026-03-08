@@ -1,0 +1,33 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/eval/eval_rgbt_adaptive_fpn_test_13080065.pbs101_20260307_172622.log
+[repo] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+[ckpt] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/train_rgbt_adaptive_fpn_e400/13053604.pbs101_20260304_193938/best.pth
+[data] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/data/RGBT-CC-CVPR2021
+[img] 768x1024
+Currently Loaded Modulefiles:
+  1) python/3.13.3-gcc11        3) craype-accel-nvidia80
+  2) cuda/11.8.0                4) pytorch/2.6.0-py3-cu11.8
+/app/apps/python/3.13.3-gcc11/bin/python3
+python ok
+torch: 2.6.0+cu118 cuda: 11.8 cuda_available: True
+[WARN] Missing keys when loading checkpoint (4): ['out2.0.weight', 'out2.0.bias', 'out2.2.weight', 'out2.2.bias']
+[WARN] Unexpected keys when loading checkpoint (4): ['out3.0.weight', 'out3.0.bias', 'out3.2.weight', 'out3.2.bias']
+{
+  "mode": "adaptive_fpn",
+  "split": "test",
+  "img_h": 768,
+  "img_w": 1024,
+  "out_stride": 4,
+  "sigma": 15.0,
+  "device": "cuda",
+  "seed": 0,
+  "deterministic": false,
+  "params_total": 49249668,
+  "params_trainable": 49249668,
+  "model_size_mb": 188.27865600585938,
+  "mae": 282.18507091760637,
+  "rmse": 449.80685155895395,
+  "num_images": 800,
+  "eval_ms_per_image": 25.19936087715905,
+  "eval_fps": 39.6835461373312
+}
+[OK] Wrote metrics to: /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/eval/eval_rgbt_adaptive_fpn_test_13080065.pbs101_20260307_172622.json
