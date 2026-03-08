@@ -63,19 +63,21 @@ class AdaptiveFPNRGBT(nn.Module):
         self.lat4 = nn.Conv2d(1024, fpn_channels, 1)
         self.lat5 = nn.Conv2d(2048, fpn_channels, 1)
 
-        self.out2 = nn.Sequential(
-            nn.Conv2d(fpn_channels, fpn_channels, 3, padding = 1),
+        head_channels = max(64, fpn_channels // 2)
+        self.scale_logits = nn.Parameter(torch.zeros(4))
+        self.head = nn.Sequential(
+            nn.Conv2d(fpn_channels * 4, fpn_channels, 3, padding = 1),
             nn.ReLU(inplace = True),
-            nn.Conv2d(fpn_channels, fpn_channels, 3, padding = 1),
+            nn.Conv2d(fpn_channels, head_channels, 3, padding = 1),
             nn.ReLU(inplace = True),
         )
-        self.den = nn.Conv2d(fpn_channels, 1, 1, bias = False)
+        self.den = nn.Conv2d(head_channels, 1, 1, bias = False)
 
         for m in [self.g2, self.g3, self.g4, self.g5, self.lat2, self.lat3, self.lat4, self.lat5, self.den]:
             nn.init.kaiming_normal_(m.weight, mode = "fan_out", nonlinearity = "relu")
             if getattr(m, "bias", None) is not None:
                 nn.init.constant_(m.bias, 0.0)
-        for m in self.out2.modules():
+        for m in self.head.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode = "fan_out", nonlinearity = "relu")
                 if m.bias is not None:
@@ -108,7 +110,21 @@ class AdaptiveFPNRGBT(nn.Module):
         p3 = self.lat3(f3) + F.interpolate(p4, size = f3.shape[-2:], mode = "bilinear", align_corners = False)
         p2 = self.lat2(f2) + F.interpolate(p3, size = f2.shape[-2:], mode = "bilinear", align_corners = False)
 
-        # Predict density at stride 4 using p2 for higher-resolution output.
-        x = self.out2(p2)
+        # Use the full pyramid at stride 4 instead of discarding p3/p4/p5.
+        p3_up = F.interpolate(p3, size = p2.shape[-2:], mode = "bilinear", align_corners = False)
+        p4_up = F.interpolate(p4, size = p2.shape[-2:], mode = "bilinear", align_corners = False)
+        p5_up = F.interpolate(p5, size = p2.shape[-2:], mode = "bilinear", align_corners = False)
+
+        level_w = torch.softmax(self.scale_logits, dim = 0)
+        x = torch.cat(
+            [
+                level_w[0] * p2,
+                level_w[1] * p3_up,
+                level_w[2] * p4_up,
+                level_w[3] * p5_up,
+            ],
+            dim = 1,
+        )
+        x = self.head(x)
         x = self.den(x)
         return F.softplus(x)

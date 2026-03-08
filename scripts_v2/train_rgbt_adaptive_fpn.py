@@ -109,6 +109,63 @@ def eval_one_epoch(model, loader, device, amp: bool):
     return {"mae": mae, "rmse": rmse, "game1": game1, "game2": game2, "game3": game3}
 
 
+def _strip_prefix(sd, prefix: str, subset_only: bool):
+    if not prefix:
+        return None
+    matched = [k for k in sd.keys() if k.startswith(prefix)]
+    if not matched:
+        return None
+    if subset_only:
+        return {k[len(prefix):]: sd[k] for k in matched}
+    return {k[len(prefix):] if k.startswith(prefix) else k: v for k, v in sd.items()}
+
+
+def _best_matching_state_dict(sd, target_keys, preferred_prefix: str):
+    prefixes = []
+    for prefix in (
+        preferred_prefix,
+        f"module.{preferred_prefix}" if preferred_prefix else "",
+        f"model.{preferred_prefix}" if preferred_prefix else "",
+        f"net.{preferred_prefix}" if preferred_prefix else "",
+        "module.",
+        "model.",
+        "net.",
+        "backbone.",
+        "encoder.",
+        "rgb.",
+        "t.",
+        "rgb_net.",
+        "t_net.",
+    ):
+        if prefix and prefix not in prefixes:
+            prefixes.append(prefix)
+
+    queue = [sd]
+    seen = set()
+    candidates = []
+    while queue:
+        cand = queue.pop(0)
+        sig = tuple(sorted(cand.keys()))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        candidates.append(cand)
+        for prefix in prefixes:
+            for subset_only in (True, False):
+                trimmed = _strip_prefix(cand, prefix, subset_only = subset_only)
+                if trimmed:
+                    queue.append(trimmed)
+
+    def score(cand):
+        keys = set(cand.keys())
+        overlap = len(keys & target_keys)
+        extra = len(keys - target_keys)
+        return (overlap, -extra, -len(keys))
+
+    best = max(candidates, key = score)
+    return best, score(best)
+
+
 def load_backbone(net: nn.Module, ckpt_path: str, prefix: str):
     if not ckpt_path:
         return
@@ -123,11 +180,15 @@ def load_backbone(net: nn.Module, ckpt_path: str, prefix: str):
                 break
     if not isinstance(ckpt, dict):
         raise ValueError(f"Unsupported checkpoint format: {type(ckpt)}")
-    sd = {kk.replace("module.", ""): vv for kk, vv in ckpt.items()}
-    if any(k.startswith(prefix) for k in sd.keys()):
-        sd = {k[len(prefix):]: v for k, v in sd.items() if k.startswith(prefix)}
+    sd = {kk[len("module."):] if kk.startswith("module.") else kk: vv for kk, vv in ckpt.items()}
+    target_keys = set(net.state_dict().keys())
+    sd, score = _best_matching_state_dict(sd, target_keys, prefix)
+    overlap = score[0]
     res = net.load_state_dict(sd, strict = False)
-    print(f"[init] warm-start {prefix} from {ckpt_path} (missing={len(res.missing_keys)} unexpected={len(res.unexpected_keys)})")
+    print(
+        f"[init] warm-start {prefix} from {ckpt_path} "
+        f"(overlap={overlap}/{len(target_keys)} missing={len(res.missing_keys)} unexpected={len(res.unexpected_keys)})"
+    )
 
 
 class EMA:
@@ -278,7 +339,7 @@ def main() -> None:
     def loss_fn(pred: torch.Tensor, gt: torch.Tensor, lambda_cnt: float = 1e-3) -> torch.Tensor:
         pred = torch.nan_to_num(pred, nan = 0.0, posinf = 0.0, neginf = 0.0)
         gt = torch.nan_to_num(gt, nan = 0.0, posinf = 0.0, neginf = 0.0)
-        den_loss = F.mse_loss(pred, gt, reduction = "sum") / pred.shape[0]
+        den_loss = F.mse_loss(pred, gt, reduction = "mean")
         if lambda_cnt > 0.0:
             pred_cnt = pred.sum(dim = (-2, -1))
             gt_cnt = gt.sum(dim = (-2, -1))

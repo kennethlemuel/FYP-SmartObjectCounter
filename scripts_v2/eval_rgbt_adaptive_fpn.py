@@ -141,7 +141,12 @@ def main() -> None:
 
     parser.add_argument("--img_h", type = int, default = 768)
     parser.add_argument("--img_w", type = int, default = 1024)
-    parser.add_argument("--out_stride", type = int, default = 4)
+    parser.add_argument(
+        "--out_stride",
+        type = int,
+        default = 4,
+        help = "Only affects dataset density labels; count MAE evaluation uses gt_count and is otherwise unchanged.",
+    )
     parser.add_argument("--sigma", type = float, default = 15.0)
 
     parser.add_argument("--batch_size", type = int, default = 1)
@@ -157,6 +162,7 @@ def main() -> None:
 
     set_seed(args.seed, deterministic = args.deterministic)
     device = get_device(args.device)
+    print("[note] eval MAE compares predicted total count against gt_count; --out_stride does not change the count target.")
 
     dataset = RGBTCC_PairedDataset(
         root = args.root,

@@ -75,8 +75,8 @@ print(newest(os.path.join(root, "outputs", "train_rgb_*", "*", "best.pth")))
 print(newest(os.path.join(root, "outputs", "train_t_*", "*", "best.pth")))
 PY
 )
-LATEST_RGB_CKPT="${WARM[0]:-}"
-LATEST_T_CKPT="${WARM[1]:-}"
+LATEST_RGB_CKPT="${RGB_WARM_CKPT:-${WARM[0]:-}}"
+LATEST_T_CKPT="${T_WARM_CKPT:-${WARM[1]:-}}"
 
 EXTRA_ARGS=()
 if [ -n "${LATEST_RGB_CKPT}" ]; then
