@@ -65,6 +65,19 @@ class CSRNetRGBT_AdaptiveFPNLite(nn.Module):
         self._idx_c3 = 15
         self._idx_c4 = 22
 
+    @staticmethod
+    def _reduce_to(x: torch.Tensor, target_hw):
+        th, tw = int(target_hw[0]), int(target_hw[1])
+        h, w = x.shape[-2:]
+        if h == th and w == tw:
+            return x
+        if h % th != 0 or w % tw != 0:
+            raise ValueError(f"Non-integer resize from {(h, w)} to {(th, tw)} is not supported.")
+        sh = h // th
+        sw = w // tw
+        b, c = x.shape[:2]
+        return x.reshape(b, c, th, sh, tw, sw).mean(dim = (3, 5))
+
     def _forward_frontend_feats(self, x: torch.Tensor):
         c2 = None
         c3 = None
@@ -90,8 +103,8 @@ class CSRNetRGBT_AdaptiveFPNLite(nn.Module):
         base_den = self.output_layer(b)
 
         target_hw = b.shape[-2:]
-        f2 = self.lat2(F.adaptive_avg_pool2d(c2, target_hw))
-        f3 = self.lat3(F.adaptive_avg_pool2d(c3, target_hw))
+        f2 = self.lat2(self._reduce_to(c2, target_hw))
+        f3 = self.lat3(self._reduce_to(c3, target_hw))
         f4 = self.lat4(c4)
         fb = self.latb(b)
 
