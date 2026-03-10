@@ -26,6 +26,7 @@ from datasets.rgbt_cc import (
 from models.csrnet import CSRNet
 from models.resnet_cc import ResNetCount
 from models.rgbt_base import CSRNetRGBT_Base
+from models.rgbt_adaptive_fpn_lite import CSRNetRGBT_AdaptiveFPNLite
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
 from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
@@ -185,7 +186,7 @@ def main() -> None:
     ap.add_argument("--data_root", type = str, required = True)
     ap.add_argument("--out_dir", type = str, required = True)
 
-    ap.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "base", "early", "late", "adaptive_late"])
+    ap.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "base", "adaptive_fpn_lite", "early", "late", "adaptive_late"])
     ap.add_argument("--epochs", type = int, default = 100)
     ap.add_argument("--batch_size", type = int, default = 1)
     ap.add_argument("--workers", type = int, default = 4)
@@ -202,6 +203,7 @@ def main() -> None:
     # Adaptive-late gate LR (separate param group)
     ap.add_argument("--gate_lr", type = float, default = None)
     ap.add_argument("--max_gate_lr", type = float, default = None)
+    ap.add_argument("--init_base_ckpt", type = str, default = "", help = "Optional: path to a pretrained base checkpoint to warm-start adaptive_fpn_lite.")
     ap.add_argument("--init_rgb_ckpt", type = str, default = "", help = "Optional: path to a pretrained RGB baseline checkpoint to warm-start adaptive_late.rgb_net")
     ap.add_argument("--init_t_ckpt", type = str, default = "", help = "Optional: path to a pretrained T baseline checkpoint to warm-start adaptive_late.t_net")
 
@@ -276,7 +278,7 @@ def main() -> None:
             is_train = False,
             deterministic = True,
         )
-    elif args.mode == "base":
+    elif args.mode in ["base", "adaptive_fpn_lite"]:
         ds_train = RGBTCC_RGBTBaseDset(
             base_train,
             crop_size = args.crop_size,
@@ -350,7 +352,7 @@ def main() -> None:
                 sigma = args.sigma,
                 return_pts = False,
             )
-        elif args.mode == "base":
+        elif args.mode in ["base", "adaptive_fpn_lite"]:
             ds_val = RGBTCC_EarlyFusionDataset(
                 root = args.data_root,
                 split = val_split,
@@ -390,6 +392,24 @@ def main() -> None:
         model = ResNetCount(load_imagenet = True).to(device)
     elif args.mode == "base":
         model = CSRNetRGBT_Base(load_imagenet = True).to(device)
+    elif args.mode == "adaptive_fpn_lite":
+        model = CSRNetRGBT_AdaptiveFPNLite(load_imagenet = True).to(device)
+
+        if args.init_base_ckpt:
+            ckpt_path = os.path.expanduser(args.init_base_ckpt)
+            if not os.path.isfile(ckpt_path):
+                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+            ckpt = torch.load(ckpt_path, map_location = "cpu")
+            if isinstance(ckpt, dict):
+                for k in ("state_dict", "model", "net"):
+                    if k in ckpt and isinstance(ckpt[k], dict):
+                        ckpt = ckpt[k]
+                        break
+            if not isinstance(ckpt, dict):
+                raise ValueError(f"Unsupported checkpoint format: {type(ckpt)}")
+            sd = {kk.replace("module.", ""): vv for kk, vv in ckpt.items()}
+            res = model.load_state_dict(sd, strict = False)
+            print(f"[init] warm-start base from {ckpt_path} (missing={len(res.missing_keys)} unexpected={len(res.unexpected_keys)})")
     elif args.mode == "early":
         model = CSRNetRGBT_Early(load_imagenet = True).to(device)
     elif args.mode == "late":
