@@ -498,13 +498,39 @@ def main() -> None:
             f"backbone_params={sum(p.numel() for p in backbone_params)} "
             f"head_params={sum(p.numel() for p in adaptive_head_params)}"
         )
+    elif args.mode == "adaptive_fpn_lite":
+        base_module_names = ("frontend", "backend", "output_layer")
+        head_module_names = ("lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out")
+
+        backbone_params = []
+        adaptive_head_params = []
+
+        for name in base_module_names:
+            mod = getattr(model, name, None)
+            if mod is not None:
+                backbone_params.extend(list(mod.parameters()))
+
+        for name in head_module_names:
+            mod = getattr(model, name, None)
+            if mod is not None:
+                adaptive_head_params.extend(list(mod.parameters()))
+
+        params = [
+            {"params": backbone_params, "lr": args.lr},
+            {"params": adaptive_head_params, "lr": args.gate_lr},
+        ]
+        print(
+            f"[init] adaptive_lite optimizer groups: "
+            f"backbone_params={sum(p.numel() for p in backbone_params)} "
+            f"head_params={sum(p.numel() for p in adaptive_head_params)}"
+        )
     else:
         params = model.parameters()
 
     opt = torch.optim.Adam(params, lr = args.lr, weight_decay = args.weight_decay)
 
     if args.use_onecycle:
-        if args.mode == "adaptive_late":
+        if args.mode in ("adaptive_late", "adaptive_fpn_lite"):
             max_lrs = [args.max_lr, args.max_gate_lr]
         else:
             max_lrs = args.max_lr
@@ -544,6 +570,15 @@ def main() -> None:
                 raise AttributeError("CSRNetRGBT_AdaptiveLate must expose a gate module as .gate or .gate_net")
             # Freeze/unfreeze experts using freeze_backbones_epochs, but keep gate trainable.
             _set_requires_grad(gate_module, True)
+        elif args.mode == "adaptive_fpn_lite" and args.freeze_backbones_epochs > 0:
+            for name in ("frontend", "backend", "output_layer"):
+                mod = getattr(model, name, None)
+                if mod is not None:
+                    _set_requires_grad(mod, ep > args.freeze_backbones_epochs)
+            for name in ("lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out"):
+                mod = getattr(model, name, None)
+                if mod is not None:
+                    _set_requires_grad(mod, True)
 
         running = 0.0
         step = 0
