@@ -81,11 +81,19 @@ def select_state_dict(obj):
     )
 
 
-def strip_module_prefix(state_dict):
+def normalize_state_dict_keys(state_dict):
     keys = list(state_dict.keys())
     if keys and all(k.startswith("module.") for k in keys):
-        return {k[len("module."):]: v for k, v in state_dict.items()}
-    return state_dict
+        state_dict = {k[len("module."):]: v for k, v in state_dict.items()}
+
+    remapped = {}
+    for key, value in state_dict.items():
+        if key.startswith("feature."):
+            key = "features." + key[len("feature."):]
+        elif key.startswith("reg."):
+            key = "reg_layer_0." + key[len("reg."):]
+        remapped[key] = value
+    return remapped
 
 
 def count_parameters(model):
@@ -162,7 +170,7 @@ def main():
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
         raw = torch_load_any(str(ckpt_path))
         state_dict, source_key = select_state_dict(raw)
-        state_dict = strip_module_prefix(state_dict)
+        state_dict = normalize_state_dict_keys(state_dict)
         try:
             incompatible = model.load_state_dict(state_dict, strict=True)
             strict_used = True
