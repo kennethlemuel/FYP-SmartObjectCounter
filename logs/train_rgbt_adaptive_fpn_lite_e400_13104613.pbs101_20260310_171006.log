@@ -1,0 +1,42 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_fpn_lite_e400_13104613.pbs101_20260310_171006.log
+[job] name=train_rgbt_adaptive_fpn_lite_e400 id=13104613.pbs101 host=x1000c3s2b0n0 time=Tue Mar 10 17:10:06 +08 2026
+torch 2.6.0+cu118 cuda True
+[init] warm-start base = /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/train_rgbt_base_e400/13092178.pbs101_20260309_120948/best.pth
+[init] device = cuda
+[init] val_fullres = True (split=val, img=768x1024)
+[init] train = 1030  val = 200  workers = 4
+[init] warm-start base from /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/train_rgbt_base_e400/13092178.pbs101_20260309_120948/best.pth (missing=9 unexpected=0)
+/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py:474: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = GradScaler(enabled = bool(args.amp))
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 667, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt.py", line 605, in main
+    loss.backward()
+    ~~~~~~~~~~~~~^^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/_tensor.py", line 626, in backward
+    torch.autograd.backward(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        self, gradient, retain_graph, create_graph, inputs=inputs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/autograd/__init__.py", line 347, in backward
+    _engine_run_backward(
+    ~~~~~~~~~~~~~~~~~~~~^
+        tensors,
+        ^^^^^^^^
+    ...<5 lines>...
+        accumulate_grad=True,
+        ^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/autograd/graph.py", line 823, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        t_outputs, *args, **kwargs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )  # Calls into the C++ engine to run the backward pass
+    ^
+RuntimeError: adaptive_avg_pool2d_backward_cuda does not have a deterministic implementation, but you set 'torch.use_deterministic_algorithms(True)'. You can turn off determinism just for this operation, or you can use the 'warn_only=True' option, if that's acceptable for your application. You can also file an issue at https://github.com/pytorch/pytorch/issues to help us prioritize adding deterministic support for this operation.
