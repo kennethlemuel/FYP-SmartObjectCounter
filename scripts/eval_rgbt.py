@@ -29,6 +29,7 @@ from models.csrnet import CSRNet
 from models.resnet_cc import ResNetCount
 from models.rgbt_base import CSRNetRGBT_Base
 from models.rgbt_adaptive_fpn_lite import CSRNetRGBT_AdaptiveFPNLite
+from models.rgbt_adaptive_fpn_lite_cal import CSRNetRGBT_AdaptiveFPNLiteCal
 try:
     from models.rgbt_early import CSRNetRGBT_EarlyFusion as CSRNetRGBT_Early
 except ImportError:
@@ -120,6 +121,8 @@ def build_model(mode: str, load_imagenet: bool) -> torch.nn.Module:
         return CSRNetRGBT_Base(load_imagenet = load_imagenet)
     if mode == "adaptive_fpn_lite":
         return CSRNetRGBT_AdaptiveFPNLite(load_imagenet = load_imagenet)
+    if mode == "adaptive_fpn_lite_cal":
+        return CSRNetRGBT_AdaptiveFPNLiteCal(load_imagenet = load_imagenet)
     if mode == "early":
         return CSRNetRGBT_Early(load_imagenet = load_imagenet)
     if mode == "late":
@@ -160,7 +163,7 @@ def build_dataset(
             sigma = sigma,
             return_pts = False,
         )
-    if mode in ["base", "adaptive_fpn_lite"]:
+    if mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal"]:
         return RGBTCC_EarlyFusionDataset(
             root = root,
             split = split,
@@ -198,7 +201,7 @@ def forward_density(model: torch.nn.Module, mode: str, batch: Tuple[Any, ...], d
     """
     mode = mode.lower()
 
-    if mode in ["rgb", "t", "base", "adaptive_fpn_lite"]:
+    if mode in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal"]:
         #dataset returns: (x, den, fname, gt_count)
         x = batch[0].to(device, non_blocking = True)
         out = model(x)
@@ -251,7 +254,7 @@ def benchmark_forward(
     model.eval()
 
     #Move inputs to device once, avoid data transfer in timing loop.
-    if mode.lower() in ["rgb", "t", "base"]:
+    if mode.lower() in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal"]:
         x = batch[0].to(device, non_blocking = True)
         batch_on_device = (x,)
     else:
@@ -264,7 +267,7 @@ def benchmark_forward(
         torch.cuda.reset_peak_memory_stats(device)
 
     for _ in range(max(0, warmup)):
-        if mode.lower() in ["rgb", "t", "base"]:
+        if mode.lower() in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal"]:
             out = model(batch_on_device[0])
         else:
             out = model(batch_on_device[0], batch_on_device[1])
@@ -275,7 +278,7 @@ def benchmark_forward(
 
     t0 = time.perf_counter()
     for _ in range(max(1, iters)):
-        if mode.lower() in ["rgb", "t", "base"]:
+        if mode.lower() in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal"]:
             out = model(batch_on_device[0])
         else:
             out = model(batch_on_device[0], batch_on_device[1])
@@ -353,7 +356,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type = str, required = True, help = "Dataset root (contains train/val/test folders).")
     parser.add_argument("--split", type = str, default = "val", choices = ["train", "val", "test"])
-    parser.add_argument("--mode", type = str, required = True, choices = ["rgb", "t", "base", "adaptive_fpn_lite", "early", "late", "adaptive_late"])
+    parser.add_argument("--mode", type = str, required = True, choices = ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "early", "late", "adaptive_late"])
     parser.add_argument("--ckpt", type = str, required = True, help = "Path to checkpoint (.pth).")
     parser.add_argument("--strict_ckpt", action = "store_true", help = "Load checkpoint with strict=True (fail on missing/unexpected keys).")
     parser.add_argument("--zero_cal_bias", action = "store_true", help = "After loading, zero rgb_cal/t_cal biases (debug constant-offset blow-up).")

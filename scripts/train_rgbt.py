@@ -27,6 +27,7 @@ from models.csrnet import CSRNet
 from models.resnet_cc import ResNetCount
 from models.rgbt_base import CSRNetRGBT_Base
 from models.rgbt_adaptive_fpn_lite import CSRNetRGBT_AdaptiveFPNLite
+from models.rgbt_adaptive_fpn_lite_cal import CSRNetRGBT_AdaptiveFPNLiteCal
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
 from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
@@ -186,7 +187,7 @@ def main() -> None:
     ap.add_argument("--data_root", type = str, required = True)
     ap.add_argument("--out_dir", type = str, required = True)
 
-    ap.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "base", "adaptive_fpn_lite", "early", "late", "adaptive_late"])
+    ap.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "early", "late", "adaptive_late"])
     ap.add_argument("--epochs", type = int, default = 100)
     ap.add_argument("--batch_size", type = int, default = 1)
     ap.add_argument("--workers", type = int, default = 4)
@@ -278,7 +279,7 @@ def main() -> None:
             is_train = False,
             deterministic = True,
         )
-    elif args.mode in ["base", "adaptive_fpn_lite"]:
+    elif args.mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal"]:
         ds_train = RGBTCC_RGBTBaseDset(
             base_train,
             crop_size = args.crop_size,
@@ -352,7 +353,7 @@ def main() -> None:
                 sigma = args.sigma,
                 return_pts = False,
             )
-        elif args.mode in ["base", "adaptive_fpn_lite"]:
+        elif args.mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal"]:
             ds_val = RGBTCC_EarlyFusionDataset(
                 root = args.data_root,
                 split = val_split,
@@ -394,6 +395,24 @@ def main() -> None:
         model = CSRNetRGBT_Base(load_imagenet = True).to(device)
     elif args.mode == "adaptive_fpn_lite":
         model = CSRNetRGBT_AdaptiveFPNLite(load_imagenet = True).to(device)
+
+        if args.init_base_ckpt:
+            ckpt_path = os.path.expanduser(args.init_base_ckpt)
+            if not os.path.isfile(ckpt_path):
+                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+            ckpt = torch.load(ckpt_path, map_location = "cpu")
+            if isinstance(ckpt, dict):
+                for k in ("state_dict", "model", "net"):
+                    if k in ckpt and isinstance(ckpt[k], dict):
+                        ckpt = ckpt[k]
+                        break
+            if not isinstance(ckpt, dict):
+                raise ValueError(f"Unsupported checkpoint format: {type(ckpt)}")
+            sd = {kk.replace("module.", ""): vv for kk, vv in ckpt.items()}
+            res = model.load_state_dict(sd, strict = False)
+            print(f"[init] warm-start base from {ckpt_path} (missing={len(res.missing_keys)} unexpected={len(res.unexpected_keys)})")
+    elif args.mode == "adaptive_fpn_lite_cal":
+        model = CSRNetRGBT_AdaptiveFPNLiteCal(load_imagenet = True).to(device)
 
         if args.init_base_ckpt:
             ckpt_path = os.path.expanduser(args.init_base_ckpt)
@@ -498,9 +517,9 @@ def main() -> None:
             f"backbone_params={sum(p.numel() for p in backbone_params)} "
             f"head_params={sum(p.numel() for p in adaptive_head_params)}"
         )
-    elif args.mode == "adaptive_fpn_lite":
+    elif args.mode in ("adaptive_fpn_lite", "adaptive_fpn_lite_cal"):
         base_module_names = ("frontend", "backend", "output_layer")
-        head_module_names = ("lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out")
+        head_module_names = ("lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out", "count_head")
 
         backbone_params = []
         adaptive_head_params = []
@@ -514,6 +533,8 @@ def main() -> None:
             mod = getattr(model, name, None)
             if mod is not None:
                 adaptive_head_params.extend(list(mod.parameters()))
+        if hasattr(model, "residual_scale"):
+            adaptive_head_params.append(model.residual_scale)
 
         params = [
             {"params": backbone_params, "lr": args.lr},
@@ -530,7 +551,7 @@ def main() -> None:
     opt = torch.optim.Adam(params, lr = args.lr, weight_decay = args.weight_decay)
 
     if args.use_onecycle:
-        if args.mode in ("adaptive_late", "adaptive_fpn_lite"):
+        if args.mode in ("adaptive_late", "adaptive_fpn_lite", "adaptive_fpn_lite_cal"):
             max_lrs = [args.max_lr, args.max_gate_lr]
         else:
             max_lrs = args.max_lr
@@ -570,12 +591,12 @@ def main() -> None:
                 raise AttributeError("CSRNetRGBT_AdaptiveLate must expose a gate module as .gate or .gate_net")
             # Freeze/unfreeze experts using freeze_backbones_epochs, but keep gate trainable.
             _set_requires_grad(gate_module, True)
-        elif args.mode == "adaptive_fpn_lite" and args.freeze_backbones_epochs > 0:
+        elif args.mode in ("adaptive_fpn_lite", "adaptive_fpn_lite_cal") and args.freeze_backbones_epochs > 0:
             for name in ("frontend", "backend", "output_layer"):
                 mod = getattr(model, name, None)
                 if mod is not None:
                     _set_requires_grad(mod, ep > args.freeze_backbones_epochs)
-            for name in ("lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out"):
+            for name in ("lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out", "count_head"):
                 mod = getattr(model, name, None)
                 if mod is not None:
                     _set_requires_grad(mod, True)
