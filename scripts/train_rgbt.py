@@ -61,6 +61,35 @@ def _set_requires_grad(module: nn.Module, req: bool) -> None:
         p.requires_grad = req
 
 
+def _extract_state_dict(ckpt_obj):
+    if isinstance(ckpt_obj, dict):
+        for k in ("state_dict", "model", "net"):
+            if k in ckpt_obj and isinstance(ckpt_obj[k], dict):
+                return ckpt_obj[k]
+    if isinstance(ckpt_obj, dict):
+        return ckpt_obj
+    raise ValueError(f"Unsupported checkpoint format: {type(ckpt_obj)}")
+
+
+def _load_model_ckpt(model: nn.Module, ckpt_path: str, *, strict: bool = False, subprefix: Optional[str] = None) -> Tuple[int, int]:
+    ckpt_path = os.path.expanduser(ckpt_path)
+    if not os.path.isfile(ckpt_path):
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+    ckpt = torch.load(ckpt_path, map_location = "cpu")
+    sd = _extract_state_dict(ckpt)
+    sd = {kk.replace("module.", ""): vv for kk, vv in sd.items()}
+
+    if subprefix is not None:
+        subprefix = f"{subprefix}."
+        sd_sub = {k[len(subprefix):]: v for k, v in sd.items() if k.startswith(subprefix)}
+        if len(sd_sub) >= 10:
+            sd = sd_sub
+
+    res = model.load_state_dict(sd, strict = strict)
+    return len(res.missing_keys), len(res.unexpected_keys)
+
+
 # -----------------------------
 # Metrics (CSRNet-style)
 # -----------------------------
@@ -207,6 +236,10 @@ def main() -> None:
     ap.add_argument("--init_base_ckpt", type = str, default = "", help = "Optional: path to a pretrained base checkpoint to warm-start adaptive_fpn_lite.")
     ap.add_argument("--init_rgb_ckpt", type = str, default = "", help = "Optional: path to a pretrained RGB baseline checkpoint to warm-start adaptive_late.rgb_net")
     ap.add_argument("--init_t_ckpt", type = str, default = "", help = "Optional: path to a pretrained T baseline checkpoint to warm-start adaptive_late.t_net")
+    ap.add_argument("--teacher_base_ckpt", type = str, default = "", help = "Optional: path to a pretrained rgbt_base checkpoint for training-only distillation.")
+    ap.add_argument("--lambda_kd_map", type = float, default = 0.0, help = "Weight for teacher density-map distillation loss.")
+    ap.add_argument("--lambda_kd_cnt", type = float, default = 0.0, help = "Weight for teacher count distillation loss.")
+    ap.add_argument("--kd_warmup_epochs", type = int, default = 0, help = "Linearly ramp KD loss from 0 to full over this many epochs.")
 
     ap.add_argument("--freeze_backbones_epochs", type = int, default = 0)
     ap.add_argument("--amp", action = "store_true")
@@ -397,38 +430,14 @@ def main() -> None:
         model = CSRNetRGBT_AdaptiveFPNLite(load_imagenet = True).to(device)
 
         if args.init_base_ckpt:
-            ckpt_path = os.path.expanduser(args.init_base_ckpt)
-            if not os.path.isfile(ckpt_path):
-                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-            ckpt = torch.load(ckpt_path, map_location = "cpu")
-            if isinstance(ckpt, dict):
-                for k in ("state_dict", "model", "net"):
-                    if k in ckpt and isinstance(ckpt[k], dict):
-                        ckpt = ckpt[k]
-                        break
-            if not isinstance(ckpt, dict):
-                raise ValueError(f"Unsupported checkpoint format: {type(ckpt)}")
-            sd = {kk.replace("module.", ""): vv for kk, vv in ckpt.items()}
-            res = model.load_state_dict(sd, strict = False)
-            print(f"[init] warm-start base from {ckpt_path} (missing={len(res.missing_keys)} unexpected={len(res.unexpected_keys)})")
+            missing, unexpected = _load_model_ckpt(model, args.init_base_ckpt, strict = False)
+            print(f"[init] warm-start base from {os.path.expanduser(args.init_base_ckpt)} (missing={missing} unexpected={unexpected})")
     elif args.mode == "adaptive_fpn_lite_cal":
         model = CSRNetRGBT_AdaptiveFPNLiteCal(load_imagenet = True).to(device)
 
         if args.init_base_ckpt:
-            ckpt_path = os.path.expanduser(args.init_base_ckpt)
-            if not os.path.isfile(ckpt_path):
-                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-            ckpt = torch.load(ckpt_path, map_location = "cpu")
-            if isinstance(ckpt, dict):
-                for k in ("state_dict", "model", "net"):
-                    if k in ckpt and isinstance(ckpt[k], dict):
-                        ckpt = ckpt[k]
-                        break
-            if not isinstance(ckpt, dict):
-                raise ValueError(f"Unsupported checkpoint format: {type(ckpt)}")
-            sd = {kk.replace("module.", ""): vv for kk, vv in ckpt.items()}
-            res = model.load_state_dict(sd, strict = False)
-            print(f"[init] warm-start base from {ckpt_path} (missing={len(res.missing_keys)} unexpected={len(res.unexpected_keys)})")
+            missing, unexpected = _load_model_ckpt(model, args.init_base_ckpt, strict = False)
+            print(f"[init] warm-start base from {os.path.expanduser(args.init_base_ckpt)} (missing={missing} unexpected={unexpected})")
     elif args.mode == "early":
         model = CSRNetRGBT_Early(load_imagenet = True).to(device)
     elif args.mode == "late":
@@ -445,34 +454,31 @@ def main() -> None:
         def _load_into(net: nn.Module, ckpt_path: str) -> None:
             if not ckpt_path:
                 return
-            ckpt_path = os.path.expanduser(ckpt_path)
-            if not os.path.isfile(ckpt_path):
-                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-            ckpt = torch.load(ckpt_path, map_location = "cpu")
-            # Common checkpoint wrappers
-            if isinstance(ckpt, dict):
-                for k in ("state_dict", "model", "net"):
-                    if k in ckpt and isinstance(ckpt[k], dict):
-                        ckpt = ckpt[k]
-                        break
-            if not isinstance(ckpt, dict):
-                raise ValueError(f"Unsupported checkpoint format: {type(ckpt)}")
-            # Strip possible prefixes
-            sd = {kk.replace("module.", ""): vv for kk, vv in ckpt.items()}
-            # If the checkpoint is a larger wrapper model, try to pick the matching subkeys
-            for prefix in ("rgb_net.", "t_net."):
-                if any(k.startswith(prefix) for k in sd.keys()):
-                    sd_sub = {k[len(prefix):]: v for k, v in sd.items() if k.startswith(prefix)}
-                    if len(sd_sub) >= 10:
-                        sd = sd_sub
-                    break
-            res = net.load_state_dict(sd, strict = False)
-            print(f"[init] warm-start from {ckpt_path} (missing={len(res.missing_keys)} unexpected={len(res.unexpected_keys)})")
+            missing, unexpected = _load_model_ckpt(net, ckpt_path, strict = False, subprefix = "rgb_net")
+            if missing > 0 and unexpected > 0:
+                missing, unexpected = _load_model_ckpt(net, ckpt_path, strict = False, subprefix = "t_net")
+            print(f"[init] warm-start from {os.path.expanduser(ckpt_path)} (missing={missing} unexpected={unexpected})")
 
         _load_into(model.rgb_net, args.init_rgb_ckpt)
         _load_into(model.t_net, args.init_t_ckpt)
     else:
         raise ValueError(f"Unknown mode: {args.mode}")
+
+    teacher_model: Optional[nn.Module] = None
+    use_kd = bool(args.teacher_base_ckpt) and (args.lambda_kd_map > 0.0 or args.lambda_kd_cnt > 0.0)
+    if use_kd:
+        if args.mode not in ("base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal"):
+            raise ValueError("teacher_base_ckpt distillation is only supported for base-style 4-channel modes.")
+        teacher_model = CSRNetRGBT_Base(load_imagenet = True).to(device)
+        missing, unexpected = _load_model_ckpt(teacher_model, args.teacher_base_ckpt, strict = False)
+        teacher_model.eval()
+        _set_requires_grad(teacher_model, False)
+        print(
+            f"[init] teacher base from {os.path.expanduser(args.teacher_base_ckpt)} "
+            f"(missing={missing} unexpected={unexpected}) "
+            f"lambda_kd_map={args.lambda_kd_map} lambda_kd_cnt={args.lambda_kd_cnt} "
+            f"kd_warmup_epochs={args.kd_warmup_epochs}"
+        )
 
     # Loss
     # Keep MSE over density maps; GT density is count-preserving (sum == number of points).
@@ -488,6 +494,26 @@ def main() -> None:
             return den_loss + lambda_cnt * cnt_loss
 
         return den_loss
+
+    def kd_loss_fn(
+        pred: torch.Tensor,
+        teacher_pred: torch.Tensor,
+        lambda_kd_map: float,
+        lambda_kd_cnt: float,
+    ) -> torch.Tensor:
+        pred = torch.nan_to_num(pred, nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
+        teacher_pred = torch.nan_to_num(teacher_pred, nan = 0.0, posinf = 0.0, neginf = 0.0).clamp_min(0.0)
+
+        loss = pred.new_zeros(())
+        if lambda_kd_map > 0.0:
+            map_loss = F.mse_loss(pred, teacher_pred, reduction = "sum") / pred.shape[0]
+            loss = loss + lambda_kd_map * map_loss
+        if lambda_kd_cnt > 0.0:
+            pred_cnt = pred.sum(dim = (-2, -1))
+            teacher_cnt = teacher_pred.sum(dim = (-2, -1))
+            cnt_loss = F.l1_loss(pred_cnt, teacher_cnt, reduction = "mean")
+            loss = loss + lambda_kd_cnt * cnt_loss
+        return loss
 
     
     scaler = GradScaler(enabled = bool(args.amp))
@@ -578,6 +604,13 @@ def main() -> None:
     for ep in range(1, args.epochs + 1):
         t0 = time.time()
         model.train()
+        if teacher_model is not None:
+            teacher_model.eval()
+
+        if args.kd_warmup_epochs > 0:
+            kd_scale = min(1.0, float(ep) / float(args.kd_warmup_epochs))
+        else:
+            kd_scale = 1.0
 
         if args.mode == "adaptive_late" and args.freeze_backbones_epochs > 0:
             # freeze_experts = (ep <= args.freeze_backbones_epochs)  # kept for readability
@@ -649,9 +682,27 @@ def main() -> None:
                     with torch.autocast(device_type = "cuda", dtype = torch.float16):
                         den_pred = model(x)
                         loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
+                        if teacher_model is not None:
+                            with torch.no_grad():
+                                teacher_pred = teacher_model(x)
+                            loss = loss + kd_scale * kd_loss_fn(
+                                den_pred,
+                                teacher_pred,
+                                lambda_kd_map = args.lambda_kd_map,
+                                lambda_kd_cnt = args.lambda_kd_cnt,
+                            )
                 else:
                     den_pred = model(x)
                     loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
+                    if teacher_model is not None:
+                        with torch.no_grad():
+                            teacher_pred = teacher_model(x)
+                        loss = loss + kd_scale * kd_loss_fn(
+                            den_pred,
+                            teacher_pred,
+                            lambda_kd_map = args.lambda_kd_map,
+                            lambda_kd_cnt = args.lambda_kd_cnt,
+                        )
 
             loss = loss / max(1, int(args.grad_accum))
 
@@ -698,7 +749,7 @@ def main() -> None:
             f"Epoch {ep:03d}: train_loss = {train_loss:.6f}  "
             f"MAE/GAME0 = {mae:.3f}  RMSE = {rmse:.3f}  "
             f"GAME1 = {g1:.3f}  GAME2 = {g2:.3f}  GAME3 = {g3:.3f}  "
-            f"lr = {lr_now:.2e}  time = {dt:.1f}s"
+            f"lr = {lr_now:.2e}  kd = {kd_scale:.2f}  time = {dt:.1f}s"
         )
 
         # Save last
