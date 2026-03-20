@@ -1,0 +1,188 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/compare_count_bins/compare_count_bins_rgbt_vs_bm_13278037.pbs101_20260320_200437.log
+[out] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437
+[job] compare_count_bins_rgbt_vs_bm 13278037.pbs101 host=x1000c0s5b0n1 time=Fri Mar 20 20:04:37 +08 2026
+[student_ckpt] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/train_rgbt_adaptive_fpn_lite_cal_distill_base_e400/13247110.pbs101_20260319_142324/best.pth
+[bm_ckpt] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/weights/broker_modality/released_finetuned_model.ckpt
+_IncompatibleKeys(missing_keys=['unet.cross_att.norm.weight', 'unet.cross_att.norm.bias', 'unet.cross_att.feature.0.weight', 'unet.cross_att.feature.0.bias', 'unet.cross_att.feature.3.weight', 'unet.cross_att.feature.3.bias', 'unet.cross_att.feature.6.weight', 'unet.cross_att.feature.6.bias', 'unet.cross_att.feature.8.weight', 'unet.cross_att.feature.8.bias', 'unet.cross_att.blocks.0.norm1_q.weight', 'unet.cross_att.blocks.0.norm1_q.bias', 'unet.cross_att.blocks.0.norm1_kv.weight', 'unet.cross_att.blocks.0.norm1_kv.bias', 'unet.cross_att.blocks.0.attn.kv.weight', 'unet.cross_att.blocks.0.attn.kv.bias', 'unet.cross_att.blocks.0.attn.q.weight', 'unet.cross_att.blocks.0.attn.q.bias', 'unet.cross_att.blocks.0.attn.proj.weight', 'unet.cross_att.blocks.0.attn.proj.bias', 'unet.cross_att.blocks.0.norm2.weight', 'unet.cross_att.blocks.0.norm2.bias', 'unet.cross_att.blocks.0.mlp.fc1.weight', 'unet.cross_att.blocks.0.mlp.fc1.bias', 'unet.cross_att.blocks.0.mlp.fc2.weight', 'unet.cross_att.blocks.0.mlp.fc2.bias', 'unet.pre_conv_rgb.conv.0.weight', 'unet.pre_conv_rgb.conv.0.bias', 'unet.pre_conv_rgb.conv.2.weight', 'unet.pre_conv_rgb.conv.2.bias', 'unet.pre_conv_t.conv.0.weight', 'unet.pre_conv_t.conv.0.bias', 'unet.pre_conv_t.conv.2.weight', 'unet.pre_conv_t.conv.2.bias', 'unet.conv1.conv.0.weight', 'unet.conv1.conv.0.bias', 'unet.conv1.conv.2.weight', 'unet.conv1.conv.2.bias', 'unet.conv2.conv.0.weight', 'unet.conv2.conv.0.bias', 'unet.conv2.conv.2.weight', 'unet.conv2.conv.2.bias', 'unet.conv3.conv.0.weight', 'unet.conv3.conv.0.bias', 'unet.conv3.conv.2.weight', 'unet.conv3.conv.2.bias', 'unet.conv4.conv.0.weight', 'unet.conv4.conv.0.bias', 'unet.conv4.conv.2.weight', 'unet.conv4.conv.2.bias', 'unet.Up4.up.1.weight', 'unet.Up4.up.1.bias', 'unet.Up_conv4.conv.0.weight', 'unet.Up_conv4.conv.0.bias', 'unet.Up_conv4.conv.2.weight', 'unet.Up_conv4.conv.2.bias', 'unet.Up3.up.1.weight', 'unet.Up3.up.1.bias', 'unet.Up_conv3.conv.0.weight', 'unet.Up_conv3.conv.0.bias', 'unet.Up_conv3.conv.2.weight', 'unet.Up_conv3.conv.2.bias', 'unet.Up2.up.1.weight', 'unet.Up2.up.1.bias', 'unet.Up_conv2.conv.0.weight', 'unet.Up_conv2.conv.0.bias', 'unet.Up_conv2.conv.2.weight', 'unet.Up_conv2.conv.2.bias', 'unet.conv.weight', 'unet.conv.bias', 'encoder.patch_embed.proj.weight', 'encoder.patch_embed.proj.bias', 'encoder.blocks.0.norm1.weight', 'encoder.blocks.0.norm1.bias', 'encoder.blocks.0.attn.qkv.weight', 'encoder.blocks.0.attn.qkv.bias', 'encoder.blocks.0.attn.proj.weight', 'encoder.blocks.0.attn.proj.bias', 'encoder.blocks.0.norm2.weight', 'encoder.blocks.0.norm2.bias', 'encoder.blocks.0.mlp.fc1.weight', 'encoder.blocks.0.mlp.fc1.bias', 'encoder.blocks.0.mlp.fc2.weight', 'encoder.blocks.0.mlp.fc2.bias', 'encoder.blocks.1.norm1.weight', 'encoder.blocks.1.norm1.bias', 'encoder.blocks.1.attn.qkv.weight', 'encoder.blocks.1.attn.qkv.bias', 'encoder.blocks.1.attn.proj.weight', 'encoder.blocks.1.attn.proj.bias', 'encoder.blocks.1.norm2.weight', 'encoder.blocks.1.norm2.bias', 'encoder.blocks.1.mlp.fc1.weight', 'encoder.blocks.1.mlp.fc1.bias', 'encoder.blocks.1.mlp.fc2.weight', 'encoder.blocks.1.mlp.fc2.bias', 'encoder.norm.weight', 'encoder.norm.bias', 'reg_layer_0.0.weight', 'reg_layer_0.0.bias', 'reg_layer_0.2.weight', 'reg_layer_0.2.bias', 'reg_layer_0.4.weight', 'reg_layer_0.4.bias'], unexpected_keys=['classifier.0.weight', 'classifier.0.bias', 'classifier.3.weight', 'classifier.3.bias', 'classifier.6.weight', 'classifier.6.bias'])
+[json] wrote /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437/summary.json
+{
+  "student_mode": "adaptive_fpn_lite_cal",
+  "student_label": "Adaptive FPN",
+  "bm_label": "BM / SOTA",
+  "student_ckpt": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/train_rgbt_adaptive_fpn_lite_cal_distill_base_e400/13247110.pbs101_20260319_142324/best.pth",
+  "bm_ckpt": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/weights/broker_modality/released_finetuned_model.ckpt",
+  "img_h": 768,
+  "img_w": 1024,
+  "amp": false,
+  "warmup": 5,
+  "iters": 30,
+  "bins": [
+    {
+      "name": "lt10",
+      "num_images": 1,
+      "student_avg_latency_ms": 11.898129081726074,
+      "bm_avg_latency_ms": 102.42317657470703,
+      "student_avg_fps": 84.04682728949928,
+      "bm_avg_fps": 9.76341520974605,
+      "rows": [
+        {
+          "id": "1758",
+          "gt_count": 8.0,
+          "student_count": 21.574512481689453,
+          "bm_count": 8.94869613647461,
+          "student_latency_ms": 11.898129081726074,
+          "bm_latency_ms": 102.42317657470703,
+          "student_fps": 84.04682728949928,
+          "bm_fps": 9.76341520974605,
+          "student_peak_mem_mb": 839.2333984375,
+          "bm_peak_mem_mb": 4955.13916015625,
+          "panel_path": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437/panels/lt10/1758.png"
+        }
+      ]
+    },
+    {
+      "name": "10to20",
+      "num_images": 2,
+      "student_avg_latency_ms": 10.664857578277587,
+      "bm_avg_latency_ms": 102.42426821390788,
+      "student_avg_fps": 93.76592171394927,
+      "bm_avg_fps": 9.763311292450135,
+      "rows": [
+        {
+          "id": "1337",
+          "gt_count": 19.0,
+          "student_count": 20.10981559753418,
+          "bm_count": 0.5092952251434326,
+          "student_latency_ms": 10.66963628133138,
+          "bm_latency_ms": 102.43659057617188,
+          "student_fps": 93.7239071354003,
+          "bm_fps": 9.762136697202937,
+          "student_peak_mem_mb": 839.3271484375,
+          "bm_peak_mem_mb": 4955.18603515625,
+          "panel_path": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437/panels/10to20/1337.png"
+        },
+        {
+          "id": "1359",
+          "gt_count": 19.0,
+          "student_count": 10.300518035888672,
+          "bm_count": 3.4507408142089844,
+          "student_latency_ms": 10.660078875223796,
+          "bm_latency_ms": 102.41194585164388,
+          "student_fps": 93.80793629249823,
+          "bm_fps": 9.764485887697333,
+          "student_peak_mem_mb": 839.3271484375,
+          "bm_peak_mem_mb": 4955.18603515625,
+          "panel_path": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437/panels/10to20/1359.png"
+        }
+      ]
+    },
+    {
+      "name": "20to50",
+      "num_images": 2,
+      "student_avg_latency_ms": 10.656375551223755,
+      "bm_avg_latency_ms": 102.40943768819173,
+      "student_avg_fps": 93.84056018654691,
+      "bm_avg_fps": 9.764725064931977,
+      "rows": [
+        {
+          "id": "1200",
+          "gt_count": 45.0,
+          "student_count": 38.82942199707031,
+          "bm_count": 1.3509492874145508,
+          "student_latency_ms": 10.661717414855957,
+          "bm_latency_ms": 102.41512069702148,
+          "student_fps": 93.7935194761969,
+          "bm_fps": 9.76418319086239,
+          "student_peak_mem_mb": 839.3271484375,
+          "bm_peak_mem_mb": 4955.18603515625,
+          "panel_path": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437/panels/20to50/1200.png"
+        },
+        {
+          "id": "1211",
+          "gt_count": 41.0,
+          "student_count": 44.9483528137207,
+          "bm_count": 5.9521260261535645,
+          "student_latency_ms": 10.651033687591553,
+          "bm_latency_ms": 102.40375467936198,
+          "student_fps": 93.88760089689691,
+          "bm_fps": 9.765266939001561,
+          "student_peak_mem_mb": 839.3271484375,
+          "bm_peak_mem_mb": 4955.18603515625,
+          "panel_path": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437/panels/20to50/1211.png"
+        }
+      ]
+    },
+    {
+      "name": "50to100",
+      "num_images": 2,
+      "student_avg_latency_ms": 10.656341361999512,
+      "bm_avg_latency_ms": 102.41983083089193,
+      "student_avg_fps": 93.84083791004673,
+      "bm_avg_fps": 9.763734390308196,
+      "rows": [
+        {
+          "id": "1197",
+          "gt_count": 58.0,
+          "student_count": 52.03877258300781,
+          "bm_count": 3.2774980068206787,
+          "student_latency_ms": 10.655812231699626,
+          "bm_latency_ms": 102.43587290445963,
+          "student_fps": 93.84549748588219,
+          "bm_fps": 9.762205091303167,
+          "student_peak_mem_mb": 839.3271484375,
+          "bm_peak_mem_mb": 4955.18603515625,
+          "panel_path": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437/panels/50to100/1197.png"
+        },
+        {
+          "id": "1202",
+          "gt_count": 98.0,
+          "student_count": 68.07819366455078,
+          "bm_count": 0.551537036895752,
+          "student_latency_ms": 10.656870492299397,
+          "bm_latency_ms": 102.40378875732422,
+          "student_fps": 93.83617833421125,
+          "bm_fps": 9.765263689313224,
+          "student_peak_mem_mb": 839.3271484375,
+          "bm_peak_mem_mb": 4955.18603515625,
+          "panel_path": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437/panels/50to100/1202.png"
+        }
+      ]
+    },
+    {
+      "name": "gt100",
+      "num_images": 2,
+      "student_avg_latency_ms": 10.65564160346985,
+      "bm_avg_latency_ms": 102.4137045542399,
+      "student_avg_fps": 93.8470003454557,
+      "bm_avg_fps": 9.764318259482916,
+      "rows": [
+        {
+          "id": "1198",
+          "gt_count": 102.0,
+          "student_count": 84.70344543457031,
+          "bm_count": 1.18867027759552,
+          "student_latency_ms": 10.655266094207764,
+          "bm_latency_ms": 102.42123057047526,
+          "student_fps": 93.8503075529576,
+          "bm_fps": 9.763600714716151,
+          "student_peak_mem_mb": 839.3271484375,
+          "bm_peak_mem_mb": 4955.18603515625,
+          "panel_path": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437/panels/gt100/1198.png"
+        },
+        {
+          "id": "1206",
+          "gt_count": 145.0,
+          "student_count": 122.75751495361328,
+          "bm_count": 5.203763008117676,
+          "student_latency_ms": 10.656017112731934,
+          "bm_latency_ms": 102.40617853800455,
+          "student_fps": 93.84369313795379,
+          "bm_fps": 9.765035804249683,
+          "student_peak_mem_mb": 839.3271484375,
+          "bm_peak_mem_mb": 4955.18603515625,
+          "panel_path": "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/compare_count_bins/13278037.pbs101_20260320_200437/panels/gt100/1206.png"
+        }
+      ]
+    }
+  ]
+}
