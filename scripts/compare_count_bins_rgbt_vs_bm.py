@@ -40,6 +40,8 @@ def parse_args():
     ap.add_argument("--data_root", required=True)
     ap.add_argument("--split", default="test", choices=["train", "val", "test"])
     ap.add_argument("--student_mode", default="adaptive_fpn_lite_cal")
+    ap.add_argument("--student_label", default="Adaptive FPN")
+    ap.add_argument("--bm_label", default="BM / SOTA")
     ap.add_argument("--student_ckpt", required=True)
     ap.add_argument("--third_party_root", default=str(PROJECT_ROOT / "third_party" / "Broker-Modality-Crowd-Counting"))
     ap.add_argument("--bm_ckpt", required=True)
@@ -88,7 +90,7 @@ def load_bm_rgb_tensor(path: Path, h: int, w: int) -> torch.Tensor:
 
 
 def load_bm_t_tensor(path: Path, h: int, w: int) -> torch.Tensor:
-    img = Image.open(path).convert("L").resize((w, h), Image.BILINEAR).convert("RGB")
+    img = Image.open(path).convert("RGB").resize((w, h), Image.BILINEAR)
     arr = np.asarray(img, dtype=np.float32) / 255.0
     arr = (arr - _IMAGENET_MEAN) / _IMAGENET_STD
     arr = np.transpose(arr, (2, 0, 1))
@@ -276,7 +278,16 @@ def density_to_heatmap(den: np.ndarray, out_hw: Tuple[int, int]) -> Image.Image:
     return Image.fromarray(rgb, mode="RGB")
 
 
-def render_panel(sample: Sample, student_pred: float, bm_pred: float, student_den: np.ndarray, bm_den: np.ndarray, out_path: Path):
+def render_panel(
+    sample: Sample,
+    student_label: str,
+    bm_label: str,
+    student_pred: float,
+    bm_pred: float,
+    student_den: np.ndarray,
+    bm_den: np.ndarray,
+    out_path: Path,
+):
     rgb = Image.open(sample.rgb_path).convert("RGB").resize((320, 240), Image.BILINEAR)
     t = Image.open(sample.t_path).convert("L").convert("RGB").resize((320, 240), Image.BILINEAR)
     student_heat = density_to_heatmap(student_den, (240, 320))
@@ -292,10 +303,10 @@ def render_panel(sample: Sample, student_pred: float, bm_pred: float, student_de
     draw.text((12, 10), f"{sample.sid}  GT={sample.gt_count:.0f}", fill=(0, 0, 0))
     draw.text((120, 285), "RGB", fill=(0, 0, 0))
     draw.text((430, 285), "Thermal", fill=(0, 0, 0))
-    draw.text((655, 10), f"Student count={student_pred:.2f}", fill=(0, 0, 0))
-    draw.text((975, 10), f"BM count={bm_pred:.2f}", fill=(0, 0, 0))
-    draw.text((720, 285), "Student density", fill=(0, 0, 0))
-    draw.text((1045, 285), "BM density", fill=(0, 0, 0))
+    draw.text((655, 10), f"{student_label} count={student_pred:.2f}", fill=(0, 0, 0))
+    draw.text((975, 10), f"{bm_label} count={bm_pred:.2f}", fill=(0, 0, 0))
+    draw.text((700, 285), f"{student_label} density", fill=(0, 0, 0))
+    draw.text((1030, 285), f"{bm_label} density", fill=(0, 0, 0))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     panel.save(out_path)
@@ -326,6 +337,8 @@ def main():
 
     results = {
         "student_mode": args.student_mode,
+        "student_label": args.student_label,
+        "bm_label": args.bm_label,
         "student_ckpt": str(Path(args.student_ckpt).resolve()),
         "bm_ckpt": str(Path(args.bm_ckpt).resolve()),
         "img_h": args.img_h,
@@ -355,7 +368,16 @@ def main():
             bm_cnt = float(bm_den.sum())
 
             panel_path = out_dir / "panels" / bin_name / f"{sample.sid}.png"
-            render_panel(sample, student_cnt, bm_cnt, student_den, bm_den, panel_path)
+            render_panel(
+                sample,
+                args.student_label,
+                args.bm_label,
+                student_cnt,
+                bm_cnt,
+                student_den,
+                bm_den,
+                panel_path,
+            )
 
             row = {
                 "id": sample.sid,
