@@ -40,7 +40,7 @@ DEFAULT_ENTRIES: List[FigureEntry] = [
 FAMILY_STYLE: Dict[str, Dict[str, object]] = {
     "Single modality": {"color": "#6b7280", "marker": "o"},
     "Simple fusion": {"color": "#2563eb", "marker": "o"},
-    "Adaptive fusion": {"color": "#d97706", "marker": "^"},
+    "Adaptive fusion": {"color": "#d97706", "marker": "o"},
     "Proposed": {"color": "#059669", "marker": "*"},
 }
 
@@ -96,6 +96,7 @@ def annotate_points(ax, rows: List[Dict[str, object]]):
             textcoords="offset points",
             xytext=(dx, dy),
             fontsize=8.5,
+            bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.75},
         )
 
 
@@ -114,14 +115,19 @@ def main():
             continue
         xs = [float(r["fps"]) for r in family_rows]
         ys = [float(r["mae"]) for r in family_rows]
-        sizes = [26.0 + float(r["params_m"]) * 7.5 for r in family_rows]
+        sizes = []
+        for r in family_rows:
+            if bool(r["highlight"]):
+                sizes.append(240.0)
+            else:
+                sizes.append(150.0)
         ax.scatter(
             xs,
             ys,
             s=sizes,
             c=style["color"],
             marker=style["marker"],
-            alpha=0.9,
+            alpha=0.95,
             edgecolors="black",
             linewidths=0.6,
             label=family,
@@ -158,21 +164,11 @@ def main():
                 markerfacecolor=style["color"],
                 markeredgecolor="black",
                 markeredgewidth=0.6,
-                markersize=7 if family != "Proposed" else 10,
+                markersize=7 if family != "Proposed" else 11,
                 linewidth=0,
             )
         )
     ax.legend(handles=legend_handles, loc="lower left", frameon=True)
-
-    fig.text(
-        0.99,
-        0.02,
-        "Point size increases slightly with parameter count (millions).",
-        ha="right",
-        va="bottom",
-        fontsize=8,
-        color="#374151",
-    )
 
     png_path = out_dir / "figure_5_1_scatter.png"
     pdf_path = out_dir / "figure_5_1_scatter.pdf"
