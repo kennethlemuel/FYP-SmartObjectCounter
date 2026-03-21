@@ -104,6 +104,20 @@ def text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -
         return draw.textsize(text, font=font)
 
 
+def draw_text_with_shadow(
+    draw: ImageDraw.ImageDraw,
+    xy: Tuple[int, int],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: Tuple[int, int, int],
+    shadow: Tuple[int, int, int] = (0, 0, 0),
+) -> None:
+    x, y = xy
+    for dx, dy in ((1, 1),):
+        draw.text((x + dx, y + dy), text, fill=shadow, font=font)
+    draw.text((x, y), text, fill=fill, font=font)
+
+
 def pick_existing(path_no_ext: Path, exts: Sequence[str]) -> Path:
     for ext in exts:
         p = Path(str(path_no_ext) + ext)
@@ -252,12 +266,12 @@ def render_figure(
     include_gt: bool,
     out_path: Path,
 ):
-    title_font = load_font(20)
+    title_font = load_font(16)
     body_font = load_font(18)
     note_font = load_font(18)
 
     header_h = 42
-    note_h = 58
+    note_h = 18
     row_extra = note_h if notes else 0
     cols = 2 + len(model_specs) + (1 if include_gt else 0)
     row_h = header_h + tile_h + row_extra
@@ -287,15 +301,25 @@ def render_figure(
             draw.text((x0 + 8, y0 + 8), display_label(label), fill=(0, 0, 0), font=title_font)
             panel.paste(tile_img, (x0, y0 + header_h))
             if sublabel:
-                draw.text((x0 + 8, y0 + header_h + tile_h - 24), sublabel, fill=(255, 255, 255), font=body_font)
+                draw_text_with_shadow(
+                    draw,
+                    (x0 + 8, y0 + header_h + tile_h - 28),
+                    sublabel,
+                    body_font,
+                    fill=(255, 255, 255),
+                )
 
-        row_text_y = min(y0 + header_h + tile_h + 10, total_h - 28)
         row_text = f"Image {sample.sid}  GT={gt_count:.0f}"
-        draw.text((8, row_text_y), row_text, fill=(0, 0, 0), font=body_font)
+        draw_text_with_shadow(
+            draw,
+            (8, y0 + header_h + tile_h - 28),
+            row_text,
+            body_font,
+            fill=(255, 255, 255),
+        )
         note = notes.get(sample.sid)
         if note:
-            prefix_w, _ = text_size(draw, row_text, body_font)
-            draw.text((16 + prefix_w, row_text_y), note, fill=(60, 60, 60), font=note_font)
+            draw.text((8, y0 + header_h + tile_h + 2), note, fill=(60, 60, 60), font=note_font)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     panel.save(out_path)
