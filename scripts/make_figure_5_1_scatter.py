@@ -25,15 +25,15 @@ class FigureEntry:
 
 
 DEFAULT_ENTRIES: List[FigureEntry] = [
-    FigureEntry("rgb", "Single modality", "logs/eval/eval_rgb_test_12899169.pbs101_20260216_180631.json"),
-    FigureEntry("t", "Single modality", "logs/eval/eval_t_test_12844394.pbs101_20260207_163134.json"),
-    FigureEntry("rgbt_base", "Simple fusion", "logs/eval/eval_rgbt_base_test_13104430.pbs101_20260310_165317.json"),
-    FigureEntry("rgbt_late", "Simple fusion", "logs/eval/eval_rgbt_late_test_12844746.pbs101_20260207_205927.json"),
-    FigureEntry("rgbt_early", "Simple fusion", "logs/eval/eval_rgbt_early_test_12844745.pbs101_20260207_205921.json"),
-    FigureEntry("rgbt_adaptive_late", "Adaptive fusion", "logs/eval/eval_rgbt_adaptive_late_test_12844390.pbs101_20260207_163108.json"),
-    FigureEntry("Adaptive FPN (heavy)", "Adaptive fusion", "logs/eval/eval_rgbt_adaptive_fpn_test_13091850.pbs101_20260309_111949.json"),
-    FigureEntry("adaptive_fpn_lite", "Adaptive fusion", "logs/eval/eval_rgbt_adaptive_fpn_lite_test_13232762.pbs101_20260318_221051.json"),
-    FigureEntry("Adaptive FPN (calibrated)", "Proposed", "logs/eval/eval_rgbt_adaptive_fpn_lite_cal_test_13244557.pbs101_20260319_120238.json", highlight=True),
+    FigureEntry("RGB", "Single modality", "logs/eval/eval_rgb_test_12899169.pbs101_20260216_180631.json"),
+    FigureEntry("T-only", "Single modality", "logs/eval/eval_t_test_12844394.pbs101_20260207_163134.json"),
+    FigureEntry("RGBT Base", "Simple fusion", "logs/eval/eval_rgbt_base_test_13104430.pbs101_20260310_165317.json"),
+    FigureEntry("RGBT Late", "Simple fusion", "logs/eval/eval_rgbt_late_test_12844746.pbs101_20260207_205927.json"),
+    FigureEntry("RGBT Early", "Simple fusion", "logs/eval/eval_rgbt_early_test_12844745.pbs101_20260207_205921.json"),
+    FigureEntry("RGBT Adaptive Late", "Adaptive fusion", "logs/eval/eval_rgbt_adaptive_late_test_12844390.pbs101_20260207_163108.json"),
+    FigureEntry("Adaptive FPN (Heavy)", "Adaptive fusion", "logs/eval/eval_rgbt_adaptive_fpn_test_13091850.pbs101_20260309_111949.json"),
+    FigureEntry("Adapative FPN (Lite)", "Adaptive fusion", "logs/eval/eval_rgbt_adaptive_fpn_lite_test_13232762.pbs101_20260318_221051.json"),
+    FigureEntry("Adaptive FPN (Lite + Calibrated)", "Proposed", "logs/eval/eval_rgbt_adaptive_fpn_lite_cal_test_13244557.pbs101_20260319_120238.json", highlight=True),
 ]
 
 
@@ -97,13 +97,6 @@ def annotate_points(ax, rows: List[Dict[str, object]]):
             xytext=(dx, dy),
             fontsize=8.5,
             bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.75},
-            arrowprops={
-                "arrowstyle": "-",
-                "color": "#6b7280",
-                "lw": 0.7,
-                "shrinkA": 0,
-                "shrinkB": 4,
-            },
         )
 
 
