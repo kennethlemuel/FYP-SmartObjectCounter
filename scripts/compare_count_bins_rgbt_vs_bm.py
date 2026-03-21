@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import torch
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -24,6 +24,21 @@ from scripts.eval_rgbt import load_checkpoint as load_student_checkpoint
 
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
+def load_font(size: int) -> ImageFont.FreeTypeFont:
+    candidates = [
+        "DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+    for candidate in candidates:
+        try:
+            return ImageFont.truetype(candidate, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 
 @dataclass
@@ -293,6 +308,9 @@ def render_panel(
     student_heat = density_to_heatmap(student_den, (240, 320))
     bm_heat = density_to_heatmap(bm_den, (240, 320))
 
+    top_font = load_font(18)
+    bottom_font = load_font(18)
+
     panel = Image.new("RGB", (1280, 320), color=(255, 255, 255))
     panel.paste(rgb, (0, 40))
     panel.paste(t, (320, 40))
@@ -300,13 +318,13 @@ def render_panel(
     panel.paste(bm_heat, (960, 40))
 
     draw = ImageDraw.Draw(panel)
-    draw.text((12, 10), f"{sample.sid}  GT={sample.gt_count:.0f}", fill=(0, 0, 0))
-    draw.text((120, 285), "RGB", fill=(0, 0, 0))
-    draw.text((430, 285), "Thermal", fill=(0, 0, 0))
-    draw.text((655, 10), f"{student_label} count={student_pred:.2f}", fill=(0, 0, 0))
-    draw.text((975, 10), f"{bm_label} count={bm_pred:.2f}", fill=(0, 0, 0))
-    draw.text((700, 285), f"{student_label} density", fill=(0, 0, 0))
-    draw.text((1030, 285), f"{bm_label} density", fill=(0, 0, 0))
+    draw.text((12, 8), f"{sample.sid}  GT={sample.gt_count:.0f}", fill=(0, 0, 0), font=top_font)
+    draw.text((110, 282), "RGB", fill=(0, 0, 0), font=bottom_font)
+    draw.text((410, 282), "Thermal", fill=(0, 0, 0), font=bottom_font)
+    draw.text((650, 8), f"{student_label} count={student_pred:.2f}", fill=(0, 0, 0), font=top_font)
+    draw.text((965, 8), f"{bm_label} count={bm_pred:.2f}", fill=(0, 0, 0), font=top_font)
+    draw.text((675, 282), f"{student_label} density", fill=(0, 0, 0), font=bottom_font)
+    draw.text((995, 282), f"{bm_label} density", fill=(0, 0, 0), font=bottom_font)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     panel.save(out_path)
