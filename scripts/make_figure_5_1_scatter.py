@@ -11,6 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +33,7 @@ DEFAULT_ENTRIES: List[FigureEntry] = [
     FigureEntry("RGBT Early", "Simple fusion", "logs/eval/eval_rgbt_early_test_12844745.pbs101_20260207_205921.json"),
     FigureEntry("RGBT Adaptive Late", "Adaptive fusion", "logs/eval/eval_rgbt_adaptive_late_test_12844390.pbs101_20260207_163108.json"),
     FigureEntry("Adaptive FPN (Heavy)", "Adaptive fusion", "logs/eval/eval_rgbt_adaptive_fpn_test_13091850.pbs101_20260309_111949.json"),
-    FigureEntry("Adapative FPN (Lite)", "Adaptive fusion", "logs/eval/eval_rgbt_adaptive_fpn_lite_test_13232762.pbs101_20260318_221051.json"),
+    FigureEntry("Adaptive FPN (Lite)", "Adaptive fusion", "logs/eval/eval_rgbt_adaptive_fpn_lite_test_13232762.pbs101_20260318_221051.json"),
     FigureEntry("Adaptive FPN (Lite + Calibrated)", "Proposed", "logs/eval/eval_rgbt_adaptive_fpn_lite_cal_test_13244557.pbs101_20260319_120238.json", highlight=True),
 ]
 
@@ -77,18 +78,18 @@ def load_metrics(entry: FigureEntry) -> Dict[str, object]:
 
 
 def annotate_points(ax, rows: List[Dict[str, object]]):
+    cluster_labels = {"RGBT Base", "Adaptive FPN (Lite)", "Adaptive FPN (Lite + Calibrated)"}
     offsets = {
         "RGB": (6, 6),
         "T-only": (6, -14),
-        "RGBT Base": (-74, -10),
         "RGBT Late": (6, 6),
         "RGBT Early": (6, -14),
         "RGBT Adaptive Late": (-108, -18),
         "Adaptive FPN (Heavy)": (8, -16),
-        "Adapative FPN (Lite)": (14, 12),
-        "Adaptive FPN (Lite + Calibrated)": (16, -22),
     }
     for row in rows:
+        if str(row["label"]) in cluster_labels:
+            continue
         dx, dy = offsets.get(str(row["label"]), (6, 6))
         ax.annotate(
             str(row["label"]),
@@ -97,6 +98,24 @@ def annotate_points(ax, rows: List[Dict[str, object]]):
             xytext=(dx, dy),
             fontsize=8.5,
             bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.75},
+        )
+
+
+def annotate_cluster_inset(ax, rows: List[Dict[str, object]]):
+    offsets = {
+        "RGBT Base": (-54, -8),
+        "Adaptive FPN (Lite)": (8, 10),
+        "Adaptive FPN (Lite + Calibrated)": (10, -18),
+    }
+    for row in rows:
+        dx, dy = offsets[str(row["label"])]
+        ax.annotate(
+            str(row["label"]),
+            (float(row["fps"]), float(row["mae"])),
+            textcoords="offset points",
+            xytext=(dx, dy),
+            fontsize=8.0,
+            bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.85},
         )
 
 
@@ -135,6 +154,37 @@ def main():
         )
 
     annotate_points(ax, rows)
+
+    cluster_labels = {"RGBT Base", "Adaptive FPN (Lite)", "Adaptive FPN (Lite + Calibrated)"}
+    cluster_rows = [r for r in rows if str(r["label"]) in cluster_labels]
+    axins = inset_axes(ax, width="35%", height="32%", loc="center right", borderpad=1.5)
+    for family, style in FAMILY_STYLE.items():
+        family_rows = [r for r in cluster_rows if r["family"] == family]
+        if not family_rows:
+            continue
+        xs = [float(r["fps"]) for r in family_rows]
+        ys = [float(r["mae"]) for r in family_rows]
+        sizes = [240.0 if bool(r["highlight"]) else 150.0 for r in family_rows]
+        axins.scatter(
+            xs,
+            ys,
+            s=sizes,
+            c=style["color"],
+            marker=style["marker"],
+            alpha=0.95,
+            edgecolors="black",
+            linewidths=0.6,
+            zorder=3 if family == "Proposed" else 2,
+        )
+    annotate_cluster_inset(axins, cluster_rows)
+    axins.set_xlim(62.0, 69.2)
+    axins.set_ylim(22.09, 22.19)
+    axins.set_xticks([62, 64, 66, 68])
+    axins.set_yticks([22.10, 22.14, 22.18])
+    axins.tick_params(labelsize=7)
+    axins.grid(True, linestyle="--", linewidth=0.4, alpha=0.35)
+    axins.set_title("Zoomed view", fontsize=8)
+    mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="#6b7280", lw=0.7)
 
     ax.set_title(args.title, fontsize=12)
     ax.set_xlabel("Evaluation throughput (FPS)")
