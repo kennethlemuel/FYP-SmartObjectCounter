@@ -10,9 +10,8 @@ from typing import Dict, List
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 from matplotlib.lines import Line2D
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -56,7 +55,7 @@ def parse_args():
     )
     ap.add_argument(
         "--title",
-        default="Figure 5.1. Accuracy-efficiency comparison across in-house models",
+        default="Figure 5.1: Accuracy versus efficiency across in-house model variants",
         help="Plot title.",
     )
     return ap.parse_args()
@@ -104,23 +103,18 @@ def annotate_points(ax, rows: List[Dict[str, object]]):
 
 def annotate_cluster_inset(ax, rows: List[Dict[str, object]]):
     offsets = {
-        "RGBT Base": (-50, -8),
-        "Adaptive FPN (Lite)": (10, 10),
-        "Adaptive FPN (Lite + Calibrated)": (12, -18),
-    }
-    short = {
-        "RGBT Base": "RGBT Base",
-        "Adaptive FPN (Lite)": "FPN Lite",
-        "Adaptive FPN (Lite + Calibrated)": "FPN Lite + Cal",
+        "RGBT Base": (-54, -8),
+        "Adaptive FPN (Lite)": (8, 10),
+        "Adaptive FPN (Lite + Calibrated)": (10, -18),
     }
     for row in rows:
         dx, dy = offsets[str(row["label"])]
         ax.annotate(
-            short[str(row["label"])],
+            str(row["label"]),
             (float(row["fps"]), float(row["mae"])),
             textcoords="offset points",
             xytext=(dx, dy),
-            fontsize=7.8,
+            fontsize=8.0,
             bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.85},
         )
 
@@ -132,8 +126,7 @@ def main():
 
     rows = [load_metrics(entry) for entry in DEFAULT_ENTRIES]
 
-    fig, ax = plt.subplots(figsize=(9.6, 6.2), dpi=220, constrained_layout=True)
-    cluster_labels = {"RGBT Base", "Adaptive FPN (Lite)", "Adaptive FPN (Lite + Calibrated)"}
+    fig, ax = plt.subplots(figsize=(9.5, 6.2), dpi=220)
 
     for family, style in FAMILY_STYLE.items():
         family_rows = [r for r in rows if r["family"] == family]
@@ -145,41 +138,26 @@ def main():
         for r in family_rows:
             if bool(r["highlight"]):
                 sizes.append(240.0)
-            elif str(r["label"]) in cluster_labels:
-                sizes.append(135.0)
             else:
                 sizes.append(150.0)
-        alphas = []
-        for r in family_rows:
-            if bool(r["highlight"]):
-                alphas.append(0.95)
-            elif str(r["label"]) in cluster_labels:
-                alphas.append(0.72)
-            else:
-                alphas.append(0.95)
         ax.scatter(
             xs,
             ys,
             s=sizes,
             c=style["color"],
             marker=style["marker"],
-            alpha=None,
+            alpha=0.95,
             edgecolors="black",
             linewidths=0.6,
             label=family,
             zorder=3 if family == "Proposed" else 2,
         )
-        coll = ax.collections[-1]
-        facecolors = coll.get_facecolors()
-        if len(facecolors) == len(alphas):
-            for idx, alpha in enumerate(alphas):
-                facecolors[idx, -1] = alpha
-            coll.set_facecolors(facecolors)
 
     annotate_points(ax, rows)
 
+    cluster_labels = {"RGBT Base", "Adaptive FPN (Lite)", "Adaptive FPN (Lite + Calibrated)"}
     cluster_rows = [r for r in rows if str(r["label"]) in cluster_labels]
-    axins = inset_axes(ax, width="34%", height="30%", loc="upper right", borderpad=1.4)
+    axins = inset_axes(ax, width="35%", height="32%", loc="center right", borderpad=1.5)
     for family, style in FAMILY_STYLE.items():
         family_rows = [r for r in cluster_rows if r["family"] == family]
         if not family_rows:
@@ -206,18 +184,7 @@ def main():
     axins.tick_params(labelsize=7)
     axins.grid(True, linestyle="--", linewidth=0.4, alpha=0.35)
     axins.set_title("Zoomed view", fontsize=8)
-
-    zoom_rect = Rectangle(
-        (62.0, 22.09),
-        69.2 - 62.0,
-        22.19 - 22.09,
-        fill=False,
-        linewidth=0.8,
-        linestyle="--",
-        edgecolor="#9ca3af",
-        alpha=0.9,
-    )
-    ax.add_patch(zoom_rect)
+    mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="#6b7280", lw=0.7)
 
     ax.set_title(args.title, fontsize=12)
     ax.set_xlabel("Evaluation throughput (FPS)")
@@ -251,13 +218,14 @@ def main():
                 linewidth=0,
             )
         )
-    ax.legend(handles=legend_handles, loc="lower left", frameon=True, fontsize=8.5, handletextpad=0.6)
+    ax.legend(handles=legend_handles, loc="lower left", frameon=True)
 
     png_path = out_dir / "figure_5_1_scatter.png"
     pdf_path = out_dir / "figure_5_1_scatter.pdf"
     csv_path = out_dir / "figure_5_1_scatter.csv"
     json_path = out_dir / "figure_5_1_scatter.json"
 
+    fig.tight_layout(rect=(0.02, 0.04, 1.0, 1.0))
     fig.savefig(png_path, bbox_inches="tight")
     fig.savefig(pdf_path, bbox_inches="tight")
     plt.close(fig)
