@@ -46,6 +46,6 @@ python3 -u scripts/export_report_qualitative.py \
   --include_gt \
   --image_ids ${IMAGE_IDS} \
   --model_spec "rgbt_base|base|${BASE_CKPT}" \
+  --model_spec "rgbt_early|early|${EARLY_CKPT}" \
   --model_spec "adaptive_fpn_lite|adaptive_fpn_lite|${LITE_CKPT}" \
-  --model_spec "Adaptive FPN (calibrated)|adaptive_fpn_lite_cal|${CAL_CKPT}" \
-  --model_spec "rgbt_early|early|${EARLY_CKPT}"
+  --model_spec "Adaptive FPN (calibrated)|adaptive_fpn_lite_cal|${CAL_CKPT}"

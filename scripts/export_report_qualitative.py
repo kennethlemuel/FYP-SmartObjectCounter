@@ -49,6 +49,8 @@ def parse_args():
     ap.add_argument("--sigma", type=float, default=15.0)
     ap.add_argument("--tile_w", type=int, default=220)
     ap.add_argument("--tile_h", type=int, default=160)
+    ap.add_argument("--col_gap", type=int, default=16)
+    ap.add_argument("--row_gap", type=int, default=18)
     ap.add_argument("--figure_name", required=True)
     ap.add_argument("--out_dir", required=True)
     ap.add_argument("--image_ids", nargs="+", required=True)
@@ -211,22 +213,24 @@ def render_figure(
     model_specs: Sequence[ModelSpec],
     tile_w: int,
     tile_h: int,
+    col_gap: int,
+    row_gap: int,
     include_gt: bool,
     out_path: Path,
 ):
     header_h = 34
-    note_h = 38
+    note_h = 52
     row_extra = note_h if notes else 0
     cols = 2 + len(model_specs) + (1 if include_gt else 0)
     row_h = header_h + tile_h + row_extra
-    total_h = row_h * len(samples)
-    total_w = cols * tile_w
+    total_h = row_h * len(samples) + row_gap * max(0, len(samples) - 1)
+    total_w = cols * tile_w + col_gap * max(0, cols - 1)
 
     panel = Image.new("RGB", (total_w, total_h), color=(255, 255, 255))
     draw = ImageDraw.Draw(panel)
 
     for ridx, sample in enumerate(samples):
-        y0 = ridx * row_h
+        y0 = ridx * (row_h + row_gap)
         rgb_img, t_img, gt_heat, gt_count = display_tiles[sample.sid]
 
         tiles: List[Tuple[str, Image.Image, str]] = [
@@ -241,16 +245,16 @@ def render_figure(
             tiles.append((spec.label, density_to_heatmap(den, (tile_h, tile_w)), f"Pred count={cnt:.2f}"))
 
         for cidx, (label, tile_img, sublabel) in enumerate(tiles):
-            x0 = cidx * tile_w
+            x0 = cidx * (tile_w + col_gap)
             draw.text((x0 + 8, y0 + 8), label, fill=(0, 0, 0))
             panel.paste(tile_img, (x0, y0 + header_h))
             if sublabel:
                 draw.text((x0 + 8, y0 + header_h + tile_h - 18), sublabel, fill=(0, 0, 0))
 
-        draw.text((8, y0 + header_h + tile_h + 4), f"Image {sample.sid}  GT={gt_count:.0f}", fill=(0, 0, 0))
+        draw.text((8, y0 + header_h + tile_h + 10), f"Image {sample.sid}  GT={gt_count:.0f}", fill=(0, 0, 0))
         note = notes.get(sample.sid)
         if note:
-            draw.text((220, y0 + header_h + tile_h + 4), note, fill=(60, 60, 60))
+            draw.text((240, y0 + header_h + tile_h + 10), note, fill=(60, 60, 60))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     panel.save(out_path)
@@ -312,6 +316,8 @@ def main():
         model_specs,
         args.tile_w,
         args.tile_h,
+        args.col_gap,
+        args.row_gap,
         bool(args.include_gt),
         figure_path,
     )
