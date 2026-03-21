@@ -1,0 +1,51 @@
+#!/bin/bash
+#PBS -N export_figure_5_2_density_compare
+#PBS -P personal-kenneth0
+#PBS -l select=1:ngpus=1:ncpus=16:mem=70gb
+#PBS -l walltime=02:00:00
+#PBS -j oe
+
+set -euo pipefail
+umask 0022
+
+REPO=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter
+LOG_DIR="${REPO}/logs/report_figures"
+OUT_DIR="${REPO}/outputs/report_figures/figure_5_2"
+mkdir -p "${LOG_DIR}" "${OUT_DIR}"
+cd "${REPO}" || exit 1
+
+TS=$(date +%Y%m%d_%H%M%S)
+LOG_FILE="${LOG_DIR}/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.log"
+exec > "${LOG_FILE}" 2>&1
+echo "[log] ${LOG_FILE}"
+
+module purge
+module load pytorch/2.6.0-py3-cu11.8
+
+export PYTHONUNBUFFERED=1
+export PYTHONPATH="${REPO}:${PYTHONPATH:-}"
+
+DATA_ROOT="${REPO}/data/RGBT-CC-CVPR2021"
+BASE_CKPT="${BASE_CKPT:-${REPO}/outputs/train_rgbt_base_e400/13092178.pbs101_20260309_120948/best.pth}"
+LITE_CKPT="${LITE_CKPT:-${REPO}/outputs/train_rgbt_adaptive_fpn_lite_tuned_e400_seed1/13209444.pbs101_20260317_212151/best.pth}"
+CAL_CKPT="${CAL_CKPT:-${REPO}/outputs/train_rgbt_adaptive_fpn_lite_cal_tuned_e400/13233054.pbs101_20260318_222804/best.pth}"
+EARLY_CKPT="${EARLY_CKPT:-${REPO}/outputs/train_rgbt_early_e400/12844539.pbs101_20260207_174348/best.pth}"
+IMAGE_IDS="${IMAGE_IDS:-1758 1200 1206}"
+
+test -d "${DATA_ROOT}"
+test -f "${BASE_CKPT}"
+test -f "${LITE_CKPT}"
+test -f "${CAL_CKPT}"
+test -f "${EARLY_CKPT}"
+
+python3 -u scripts/export_report_qualitative.py \
+  --data_root "${DATA_ROOT}" \
+  --split test \
+  --figure_name figure_5_2_density_compare \
+  --out_dir "${OUT_DIR}" \
+  --include_gt \
+  --image_ids ${IMAGE_IDS} \
+  --model_spec "rgbt_base|base|${BASE_CKPT}" \
+  --model_spec "adaptive_fpn_lite|adaptive_fpn_lite|${LITE_CKPT}" \
+  --model_spec "Adaptive FPN (calibrated)|adaptive_fpn_lite_cal|${CAL_CKPT}" \
+  --model_spec "rgbt_early|early|${EARLY_CKPT}"
