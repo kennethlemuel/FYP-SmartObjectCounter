@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import torch
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -68,6 +68,32 @@ def parse_args():
     )
     ap.add_argument("--include_gt", action="store_true")
     return ap.parse_args()
+
+
+def load_font(size: int) -> ImageFont.FreeTypeFont:
+    candidates = [
+        "DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+    for candidate in candidates:
+        try:
+            return ImageFont.truetype(candidate, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def display_label(label: str) -> str:
+    mapping = {
+        "GT density": "Ground Truth Density",
+        "rgbt_base": "RGBT Base",
+        "rgbt_early": "RGBT Early",
+        "adaptive_fpn_lite": "Adaptive FPN (Lite)",
+        "Adaptive FPN (calibrated)": "Adaptive FPN (Lite + Cal)",
+    }
+    return mapping.get(label, label)
 
 
 def pick_existing(path_no_ext: Path, exts: Sequence[str]) -> Path:
@@ -218,8 +244,12 @@ def render_figure(
     include_gt: bool,
     out_path: Path,
 ):
-    header_h = 34
-    note_h = 52
+    title_font = load_font(20)
+    body_font = load_font(18)
+    note_font = load_font(18)
+
+    header_h = 42
+    note_h = 58
     row_extra = note_h if notes else 0
     cols = 2 + len(model_specs) + (1 if include_gt else 0)
     row_h = header_h + tile_h + row_extra
@@ -242,19 +272,19 @@ def render_figure(
 
         for spec in model_specs:
             den, cnt = predictions[sample.sid][spec.label]
-            tiles.append((spec.label, density_to_heatmap(den, (tile_h, tile_w)), f"Pred count={cnt:.2f}"))
+            tiles.append((display_label(spec.label), density_to_heatmap(den, (tile_h, tile_w)), f"Pred={cnt:.2f}"))
 
         for cidx, (label, tile_img, sublabel) in enumerate(tiles):
             x0 = cidx * (tile_w + col_gap)
-            draw.text((x0 + 8, y0 + 8), label, fill=(0, 0, 0))
+            draw.text((x0 + 8, y0 + 8), display_label(label), fill=(0, 0, 0), font=title_font)
             panel.paste(tile_img, (x0, y0 + header_h))
             if sublabel:
-                draw.text((x0 + 8, y0 + header_h + tile_h - 18), sublabel, fill=(0, 0, 0))
+                draw.text((x0 + 8, y0 + header_h + tile_h - 24), sublabel, fill=(0, 0, 0), font=body_font)
 
-        draw.text((8, y0 + header_h + tile_h + 10), f"Image {sample.sid}  GT={gt_count:.0f}", fill=(0, 0, 0))
+        draw.text((8, y0 + header_h + tile_h + 10), f"Image {sample.sid}  GT={gt_count:.0f}", fill=(0, 0, 0), font=body_font)
         note = notes.get(sample.sid)
         if note:
-            draw.text((240, y0 + header_h + tile_h + 10), note, fill=(60, 60, 60))
+            draw.text((240, y0 + header_h + tile_h + 10), note, fill=(60, 60, 60), font=note_font)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     panel.save(out_path)
