@@ -78,15 +78,15 @@ def load_metrics(entry: FigureEntry) -> Dict[str, object]:
 
 def annotate_points(ax, rows: List[Dict[str, object]]):
     offsets = {
-        "rgb": (6, 6),
-        "t": (6, -14),
-        "rgbt_base": (-64, -10),
-        "rgbt_late": (6, 6),
-        "rgbt_early": (6, -14),
-        "rgbt_adaptive_late": (-92, -14),
-        "Adaptive FPN (heavy)": (-10, -14),
-        "adaptive_fpn_lite": (12, 10),
-        "Adaptive FPN (calibrated)": (14, -18),
+        "RGB": (6, 6),
+        "T-only": (6, -14),
+        "RGBT Base": (-74, -10),
+        "RGBT Late": (6, 6),
+        "RGBT Early": (6, -14),
+        "RGBT Adaptive Late": (-108, -18),
+        "Adaptive FPN (Heavy)": (8, -16),
+        "Adapative FPN (Lite)": (14, 12),
+        "Adaptive FPN (Lite + Calibrated)": (16, -22),
     }
     for row in rows:
         dx, dy = offsets.get(str(row["label"]), (6, 6))
@@ -138,7 +138,7 @@ def main():
 
     ax.set_title(args.title, fontsize=12)
     ax.set_xlabel("Evaluation throughput (FPS)")
-    ax.set_ylabel("MAE (lower is better)")
+    ax.set_ylabel("MAE")
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.45)
 
     max_fps = max(float(r["fps"]) for r in rows)
