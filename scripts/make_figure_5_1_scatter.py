@@ -80,13 +80,13 @@ def annotate_points(ax, rows: List[Dict[str, object]]):
     offsets = {
         "rgb": (6, 6),
         "t": (6, -14),
-        "rgbt_base": (6, -12),
+        "rgbt_base": (-64, -10),
         "rgbt_late": (6, 6),
         "rgbt_early": (6, -14),
-        "rgbt_adaptive_late": (-78, -4),
+        "rgbt_adaptive_late": (-92, -14),
         "Adaptive FPN (heavy)": (-10, -14),
-        "adaptive_fpn_lite": (8, 8),
-        "Adaptive FPN (calibrated)": (8, -16),
+        "adaptive_fpn_lite": (12, 10),
+        "Adaptive FPN (calibrated)": (14, -18),
     }
     for row in rows:
         dx, dy = offsets.get(str(row["label"]), (6, 6))
@@ -97,6 +97,13 @@ def annotate_points(ax, rows: List[Dict[str, object]]):
             xytext=(dx, dy),
             fontsize=8.5,
             bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.75},
+            arrowprops={
+                "arrowstyle": "-",
+                "color": "#6b7280",
+                "lw": 0.7,
+                "shrinkA": 0,
+                "shrinkB": 4,
+            },
         )
 
 
