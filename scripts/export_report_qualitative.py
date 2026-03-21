@@ -96,6 +96,14 @@ def display_label(label: str) -> str:
     return mapping.get(label, label)
 
 
+def text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> Tuple[int, int]:
+    try:
+        left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+        return right - left, bottom - top
+    except AttributeError:
+        return draw.textsize(text, font=font)
+
+
 def pick_existing(path_no_ext: Path, exts: Sequence[str]) -> Path:
     for ext in exts:
         p = Path(str(path_no_ext) + ext)
@@ -279,12 +287,15 @@ def render_figure(
             draw.text((x0 + 8, y0 + 8), display_label(label), fill=(0, 0, 0), font=title_font)
             panel.paste(tile_img, (x0, y0 + header_h))
             if sublabel:
-                draw.text((x0 + 8, y0 + header_h + tile_h - 24), sublabel, fill=(0, 0, 0), font=body_font)
+                draw.text((x0 + 8, y0 + header_h + tile_h - 24), sublabel, fill=(255, 255, 255), font=body_font)
 
-        draw.text((8, y0 + header_h + tile_h + 10), f"Image {sample.sid}  GT={gt_count:.0f}", fill=(0, 0, 0), font=body_font)
+        row_text_y = min(y0 + header_h + tile_h + 10, total_h - 28)
+        row_text = f"Image {sample.sid}  GT={gt_count:.0f}"
+        draw.text((8, row_text_y), row_text, fill=(0, 0, 0), font=body_font)
         note = notes.get(sample.sid)
         if note:
-            draw.text((240, y0 + header_h + tile_h + 10), note, fill=(60, 60, 60), font=note_font)
+            prefix_w, _ = text_size(draw, row_text, body_font)
+            draw.text((16 + prefix_w, row_text_y), note, fill=(60, 60, 60), font=note_font)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     panel.save(out_path)
