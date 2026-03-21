@@ -2,6 +2,7 @@
 import argparse
 import csv
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
@@ -9,6 +10,7 @@ from typing import Dict, List
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -37,7 +39,7 @@ DEFAULT_ENTRIES: List[FigureEntry] = [
 
 FAMILY_STYLE: Dict[str, Dict[str, object]] = {
     "Single modality": {"color": "#6b7280", "marker": "o"},
-    "Simple fusion": {"color": "#2563eb", "marker": "s"},
+    "Simple fusion": {"color": "#2563eb", "marker": "o"},
     "Adaptive fusion": {"color": "#d97706", "marker": "^"},
     "Proposed": {"color": "#059669", "marker": "*"},
 }
@@ -76,15 +78,15 @@ def load_metrics(entry: FigureEntry) -> Dict[str, object]:
 
 def annotate_points(ax, rows: List[Dict[str, object]]):
     offsets = {
-        "rgb": (6, 8),
+        "rgb": (6, 6),
         "t": (6, -14),
-        "rgbt_base": (6, -10),
-        "rgbt_late": (6, 8),
-        "rgbt_early": (6, -10),
-        "rgbt_adaptive_late": (6, -10),
-        "Adaptive FPN (heavy)": (6, 8),
-        "adaptive_fpn_lite": (6, 8),
-        "Adaptive FPN (calibrated)": (6, -14),
+        "rgbt_base": (6, -12),
+        "rgbt_late": (6, 6),
+        "rgbt_early": (6, -14),
+        "rgbt_adaptive_late": (-78, -4),
+        "Adaptive FPN (heavy)": (-10, -14),
+        "adaptive_fpn_lite": (8, 8),
+        "Adaptive FPN (calibrated)": (8, -16),
     }
     for row in rows:
         dx, dy = offsets.get(str(row["label"]), (6, 6))
@@ -104,7 +106,7 @@ def main():
 
     rows = [load_metrics(entry) for entry in DEFAULT_ENTRIES]
 
-    fig, ax = plt.subplots(figsize=(9.5, 6.4), dpi=220)
+    fig, ax = plt.subplots(figsize=(9.5, 6.2), dpi=220)
 
     for family, style in FAMILY_STYLE.items():
         family_rows = [r for r in rows if r["family"] == family]
@@ -112,16 +114,16 @@ def main():
             continue
         xs = [float(r["fps"]) for r in family_rows]
         ys = [float(r["mae"]) for r in family_rows]
-        sizes = [float(r["params_m"]) * 22.0 for r in family_rows]
+        sizes = [26.0 + float(r["params_m"]) * 7.5 for r in family_rows]
         ax.scatter(
             xs,
             ys,
             s=sizes,
             c=style["color"],
             marker=style["marker"],
-            alpha=0.85,
+            alpha=0.9,
             edgecolors="black",
-            linewidths=0.7,
+            linewidths=0.6,
             label=family,
             zorder=3 if family == "Proposed" else 2,
         )
@@ -132,21 +134,40 @@ def main():
     ax.set_xlabel("Evaluation throughput (FPS)")
     ax.set_ylabel("MAE (lower is better)")
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.45)
-    ax.invert_yaxis()
 
-    ax.set_xlim(left=0)
+    max_fps = max(float(r["fps"]) for r in rows)
+    min_mae = min(float(r["mae"]) for r in rows)
+    max_mae = max(float(r["mae"]) for r in rows)
+    ax.set_xlim(0, math.ceil((max_fps + 4.0) / 5.0) * 5.0)
+    ax.set_ylim(math.floor(min_mae - 1.0), math.ceil(max_mae + 2.0))
+    ax.set_yticks([20, 25, 30, 35, 40, 45])
+
     ymin = min(float(r["mae"]) for r in rows)
     ymax = max(float(r["mae"]) for r in rows)
-    ax.set_ylim(ymax + 3.0, max(0.0, ymin - 2.0))
+    ax.set_ylim(math.floor(ymin - 1.0), math.ceil(ymax + 2.0))
 
-    handles, labels = ax.get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    ax.legend(by_label.values(), by_label.keys(), loc="upper right", frameon=True)
+    legend_handles = []
+    for family, style in FAMILY_STYLE.items():
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                marker=style["marker"],
+                color="w",
+                label=family,
+                markerfacecolor=style["color"],
+                markeredgecolor="black",
+                markeredgewidth=0.6,
+                markersize=7 if family != "Proposed" else 10,
+                linewidth=0,
+            )
+        )
+    ax.legend(handles=legend_handles, loc="lower left", frameon=True)
 
     fig.text(
         0.99,
         0.02,
-        "Bubble size is proportional to parameter count (millions).",
+        "Point size increases slightly with parameter count (millions).",
         ha="right",
         va="bottom",
         fontsize=8,
