@@ -16,7 +16,7 @@ fi
 
 LOG_DIR="${REPO}/logs/benchmark_bm_sota"
 OUT_DIR_ROOT="${REPO}/outputs/benchmark_bm_sota"
-WEIGHTS_DIR="${REPO}/weights/broker_modality"
+WEIGHTS_DIR="${REPO}/weights/weights_broker_modality"
 THIRD_PARTY_ROOT="${REPO}/third_party/Broker-Modality-Crowd-Counting"
 
 : "${PBS_JOBID:=manual}"
