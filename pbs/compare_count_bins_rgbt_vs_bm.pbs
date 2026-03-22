@@ -31,8 +31,8 @@ export PYTHONPATH="${REPO}:${PYTHONPATH:-}"
 
 DATA_ROOT="${REPO}/data/RGBT-CC-CVPR2021"
 THIRD_PARTY_ROOT="${REPO}/third_party/Broker-Modality-Crowd-Counting"
-VGG19_LOCAL="${REPO}/weights/weights_broker_modality/vgg19-dcbb9e9d.pth"
-BM_CKPT="${BM_CKPT:-${REPO}/weights/weights_broker_modality/released_finetuned_model.ckpt}"
+VGG19_LOCAL="${REPO}/weights_broker_modality/vgg19-dcbb9e9d.pth"
+BM_CKPT="${BM_CKPT:-${REPO}/weights_broker_modality/released_finetuned_model.ckpt}"
 STUDENT_CKPT="${STUDENT_CKPT:-}"
 
 if [ -z "${STUDENT_CKPT}" ]; then

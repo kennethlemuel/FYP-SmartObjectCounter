@@ -108,7 +108,7 @@ External code used only for contextual benchmarking.
 - `Broker-Modality-Crowd-Counting/`
   - BM / SOTA reference implementation used for inference benchmarking only
 
-### `weights/weights_broker_modality/`
+### `weights_broker_modality/`
 
 Local BM weight files used by the contextual benchmark.
 
@@ -177,13 +177,13 @@ Notes:
 If you want to run the BM benchmark, make sure both of these exist:
 
 - `third_party/Broker-Modality-Crowd-Counting/`
-- `weights/weights_broker_modality/`
+- `weights_broker_modality/`
 
 Required BM files:
 
 ```text
-weights/weights_broker_modality/released_finetuned_model.ckpt
-weights/weights_broker_modality/vgg19-dcbb9e9d.pth
+weights_broker_modality/released_finetuned_model.ckpt
+weights_broker_modality/vgg19-dcbb9e9d.pth
 ```
 
 ## Running the Final Proposed Model
