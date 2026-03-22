@@ -179,6 +179,10 @@ If you want to run the BM benchmark, make sure both of these exist:
 - `third_party/Broker-Modality-Crowd-Counting/`
 - `weights_broker_modality/`
 
+The BM / SOTA inference code used here is based on the public GitHub repository:
+
+- [HenryCilence/Broker-Modality-Crowd-Counting](https://github.com/HenryCilence/Broker-Modality-Crowd-Counting)
+
 Required BM files:
 
 ```text
@@ -303,6 +307,9 @@ This benchmark is used only for:
 - parameter count
 
 It is not a local reproduction of BM training or BM accuracy.
+The inference reference implementation comes from:
+
+- [HenryCilence/Broker-Modality-Crowd-Counting](https://github.com/HenryCilence/Broker-Modality-Crowd-Counting)
 
 ### Scene-level BM comparison across crowd-count bins
 
