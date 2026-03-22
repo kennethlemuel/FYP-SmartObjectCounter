@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N train_rgbt_adaptive_fpn_e100_sanity
+#PBS -N train_rgbt_adaptive_fpn_e400_nowarm
 #PBS -P personal-kenneth0
 #PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
 #PBS -l walltime=12:00:00
@@ -10,7 +10,7 @@ umask 0022
 
 REPO_DEFAULT="/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter"
 REPO="${REPO_DEFAULT}"
-if [ -n "${PBS_O_WORKDIR:-}" ] && [ -f "${PBS_O_WORKDIR}/scripts_v2/train_rgbt_adaptive_fpn.py" ]; then
+if [ -n "${PBS_O_WORKDIR:-}" ] && [ -f "${PBS_O_WORKDIR}/scripts/train_rgbt_adaptive_fpn.py" ]; then
   REPO="${PBS_O_WORKDIR}"
 fi
 
@@ -18,7 +18,7 @@ LOG_DIR="${REPO}/logs"
 DATA_ROOT="${REPO}/data/RGBT-CC-CVPR2021"
 
 : "${PBS_JOBID:=manual}"
-: "${PBS_JOBNAME:=train_rgbt_adaptive_fpn_e100_sanity}"
+: "${PBS_JOBNAME:=train_rgbt_adaptive_fpn_e400_nowarm}"
 
 TS="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="${LOG_DIR}/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.log"
@@ -43,7 +43,7 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="${REPO}:${PYTHONPATH:-}"
 
-EPOCHS=20
+EPOCHS=400
 BATCH_SIZE=1
 WORKERS=4
 SEED=0
@@ -58,41 +58,7 @@ MDROP_PROB=0.0
 FREEZE_EPOCHS=5
 EMA_DECAY=0.999
 
-# Auto-pick latest RGB/T checkpoints for warm-start (if available).
-mapfile -t WARM < <(python3 - <<'PY'
-import os
-import glob
-
-root = os.environ.get("REPO", "")
-def newest(pattern: str) -> str:
-    paths = glob.glob(pattern)
-    if not paths:
-        return ""
-    paths.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-    return paths[0]
-
-print(newest(os.path.join(root, "outputs", "train_rgb_*", "*", "best.pth")))
-print(newest(os.path.join(root, "outputs", "train_t_*", "*", "best.pth")))
-PY
-)
-LATEST_RGB_CKPT="${RGB_WARM_CKPT:-${WARM[0]:-}}"
-LATEST_T_CKPT="${T_WARM_CKPT:-${WARM[1]:-}}"
-
-EXTRA_ARGS=()
-if [ -n "${LATEST_RGB_CKPT}" ]; then
-  echo "[init] warm-start rgb = ${LATEST_RGB_CKPT}"
-  EXTRA_ARGS+=(--init_rgb_ckpt "${LATEST_RGB_CKPT}")
-else
-  echo "[init] warm-start rgb = NONE"
-fi
-if [ -n "${LATEST_T_CKPT}" ]; then
-  echo "[init] warm-start t = ${LATEST_T_CKPT}"
-  EXTRA_ARGS+=(--init_t_ckpt "${LATEST_T_CKPT}")
-else
-  echo "[init] warm-start t = NONE"
-fi
-
-python3 -u scripts_v2/train_rgbt_adaptive_fpn.py \
+python3 -u scripts/train_rgbt_adaptive_fpn.py \
   --data_root "${DATA_ROOT}" \
   --out_dir "${OUT_DIR}" \
   --epochs "${EPOCHS}" \
@@ -116,5 +82,4 @@ python3 -u scripts_v2/train_rgbt_adaptive_fpn.py \
   --deterministic \
   --val_fullres \
   --val_img_h 768 \
-  --val_img_w 1024 \
-  "${EXTRA_ARGS[@]}"
+  --val_img_w 1024

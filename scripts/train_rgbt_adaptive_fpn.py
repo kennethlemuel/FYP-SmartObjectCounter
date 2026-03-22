@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch.cuda.amp import GradScaler
 
 from datasets.rgbt_cc import RGBTCCDset, RGBTCC_PairedDataset, build_splits_rgbt_cc
-from models_v2.rgbt_adaptive_fpn import AdaptiveFPNRGBT
+from models.rgbt_adaptive_fpn import AdaptiveFPNRGBT
 
 
 def set_seed(seed: int, deterministic: bool = True) -> None:

@@ -10,7 +10,7 @@ umask 0022
 
 REPO_DEFAULT="/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter"
 REPO="${REPO_DEFAULT}"
-if [ -n "${PBS_O_WORKDIR:-}" ] && [ -f "${PBS_O_WORKDIR}/scripts_v2/train_rgbt_adaptive_fpn.py" ]; then
+if [ -n "${PBS_O_WORKDIR:-}" ] && [ -f "${PBS_O_WORKDIR}/scripts/train_rgbt_adaptive_fpn.py" ]; then
   REPO="${PBS_O_WORKDIR}"
 fi
 
@@ -92,7 +92,7 @@ else
   echo "[init] warm-start t = NONE"
 fi
 
-python3 -u scripts_v2/train_rgbt_adaptive_fpn.py \
+python3 -u scripts/train_rgbt_adaptive_fpn.py \
   --data_root "${DATA_ROOT}" \
   --out_dir "${OUT_DIR}" \
   --epochs "${EPOCHS}" \

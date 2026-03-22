@@ -49,7 +49,7 @@ test -d "${DATA_ROOT}"
 
 OUT_JSON="${LOG_DIR}/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.json"
 
-python3 -u scripts_v2/eval_rgbt_adaptive_fpn.py \
+python3 -u scripts/eval_rgbt_adaptive_fpn.py \
   --root "${DATA_ROOT}" \
   --split test \
   --ckpt "${CKPT}" \

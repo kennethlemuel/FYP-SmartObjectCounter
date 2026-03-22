@@ -16,7 +16,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from datasets.rgbt_cc import RGBTCC_PairedDataset
-from models_v2.rgbt_adaptive_fpn import AdaptiveFPNRGBT
+from models.rgbt_adaptive_fpn import AdaptiveFPNRGBT
 
 
 def set_seed(seed: int, deterministic: bool = True) -> None:
