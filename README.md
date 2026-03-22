@@ -323,38 +323,6 @@ Outputs are written under:
 outputs/compare_count_bins/<JOBID>_<TIMESTAMP>/
 ```
 
-## Report Figure Generation
-
-### Figure 5.1
-
-```bash
-qsub pbs/make_figure_5_1_scatter.pbs
-```
-
-Outputs:
-
-```text
-outputs/report_figures/figure_5_1/
-```
-
-### Figure 5.2
-
-```bash
-qsub pbs/export_figure_5_2_density_compare.pbs
-```
-
-If the `rgbt_early` checkpoint needs to be overridden:
-
-```bash
-qsub -v EARLY_CKPT=/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/train_rgbt_early_e400/<RUN_DIR>/best.pth pbs/export_figure_5_2_density_compare.pbs
-```
-
-### Figure 5.3
-
-```bash
-qsub pbs/export_figure_5_3_failure_cases.pbs
-```
-
 ## Final Notes
 
 - Final proposed model: **Adaptive FPN Lite + Calibration**

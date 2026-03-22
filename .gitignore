@@ -10,3 +10,4 @@ Thumbs.db
 *.o*
 *.e*
 outputs/
+logs/report_figures/
