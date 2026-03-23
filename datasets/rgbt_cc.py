@@ -732,6 +732,31 @@ def _apply_crop_hflip_rgb_t_pts(rgb_np, t_np, pts_xy, crop_h: int, crop_w: int, 
     return rgb_c, t_c, pts
 
 
+def _shift_modal_image(img_np, dy: int, dx: int, fill_value: int = 0):
+    """
+    Shift an HxW or HxWxC numpy image by (dy, dx) without changing output size.
+    Newly uncovered pixels are filled with fill_value.
+    """
+    import numpy as np
+
+    out = np.full_like(img_np, fill_value)
+    h, w = img_np.shape[:2]
+
+    src_y0 = max(0, -dy)
+    src_y1 = min(h, h - dy) if dy >= 0 else h
+    dst_y0 = max(0, dy)
+    dst_y1 = dst_y0 + max(0, src_y1 - src_y0)
+
+    src_x0 = max(0, -dx)
+    src_x1 = min(w, w - dx) if dx >= 0 else w
+    dst_x0 = max(0, dx)
+    dst_x1 = dst_x0 + max(0, src_x1 - src_x0)
+
+    if src_y1 > src_y0 and src_x1 > src_x0 and dst_y1 > dst_y0 and dst_x1 > dst_x0:
+        out[dst_y0:dst_y1, dst_x0:dst_x1, ...] = img_np[src_y0:src_y1, src_x0:src_x1, ...]
+    return out
+
+
 class RGBTCCDset(torch.utils.data.Dataset):
     # Paired RGB-T dataset returning density maps (CSRNet-style).
     def __init__(
@@ -742,6 +767,8 @@ class RGBTCCDset(torch.utils.data.Dataset):
         down: int = 8,
         is_train: bool = True,
         deterministic: bool = False,
+        thermal_shift_px: int = 0,
+        thermal_shift_p: float = 0.0,
     ):
         self.base = list(base)
         self.crop_h = int(crop_size)
@@ -750,6 +777,8 @@ class RGBTCCDset(torch.utils.data.Dataset):
         self.down = int(down)
         self.is_train = bool(is_train)
         self.deterministic = bool(deterministic)
+        self.thermal_shift_px = max(0, int(thermal_shift_px))
+        self.thermal_shift_p = float(max(0.0, min(1.0, thermal_shift_p)))
 
     def __len__(self):
         return len(self.base)
@@ -785,6 +814,13 @@ class RGBTCCDset(torch.utils.data.Dataset):
             rgb_np, t_np, pts_xy=pts, crop_h=self.crop_h, crop_w=self.crop_w,
             deterministic=self.deterministic, is_train=self.is_train
         )
+
+        if self.is_train and not self.deterministic and self.thermal_shift_px > 0 and self.thermal_shift_p > 0.0:
+            if random.random() < self.thermal_shift_p:
+                dy = random.randint(-self.thermal_shift_px, self.thermal_shift_px)
+                dx = random.randint(-self.thermal_shift_px, self.thermal_shift_px)
+                if dy != 0 or dx != 0:
+                    t_np = _shift_modal_image(t_np, dy=dy, dx=dx, fill_value=0)
 
         if (rgb_np.shape[0] != self.crop_h) or (rgb_np.shape[1] != self.crop_w):
             rgb_np = _pad_to_min_size(rgb_np, self.crop_h, self.crop_w)
@@ -855,8 +891,27 @@ class RGBTCC_RGBTBaseDset(torch.utils.data.Dataset):
     Crop-based RGBT dataset that returns a single 4-channel tensor:
     RGB (3ch, ImageNet norm) + Thermal (1ch, ImageNet-mean/std on gray).
     """
-    def __init__(self, base, crop_size: int = 224, sigma: float = 15.0, down: int = 8, is_train: bool = True, deterministic: bool = False):
-        self.paired = RGBTCCDset(base, crop_size=crop_size, sigma=sigma, down=down, is_train=is_train, deterministic=deterministic)
+    def __init__(
+        self,
+        base,
+        crop_size: int = 224,
+        sigma: float = 15.0,
+        down: int = 8,
+        is_train: bool = True,
+        deterministic: bool = False,
+        thermal_shift_px: int = 0,
+        thermal_shift_p: float = 0.0,
+    ):
+        self.paired = RGBTCCDset(
+            base,
+            crop_size=crop_size,
+            sigma=sigma,
+            down=down,
+            is_train=is_train,
+            deterministic=deterministic,
+            thermal_shift_px=thermal_shift_px,
+            thermal_shift_p=thermal_shift_p,
+        )
 
     def __len__(self):
         return len(self.paired)
