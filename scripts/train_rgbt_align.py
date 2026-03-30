@@ -29,6 +29,7 @@ from models.rgbt_base import CSRNetRGBT_Base
 from models.rgbt_adaptive_fpn_lite import CSRNetRGBT_AdaptiveFPNLite
 from models.rgbt_adaptive_fpn_lite_cal import CSRNetRGBT_AdaptiveFPNLiteCal
 from models.rgbt_adaptive_fpn_lite_cal_align import CSRNetRGBT_AdaptiveFPNLiteCalAlign
+from models.rgbt_adaptive_fpn_lite_cal_misalign import CSRNetRGBT_AdaptiveFPNLiteCalMisalign
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
 from models.rgbt_adaptive_late import CSRNetRGBT_AdaptiveLate
@@ -60,6 +61,65 @@ def seed_worker(worker_id: int) -> None:
 def _set_requires_grad(module: nn.Module, req: bool) -> None:
     for p in module.parameters():
         p.requires_grad = req
+
+
+def _warp_thermal_with_shift(thermal: torch.Tensor, shift_px: torch.Tensor) -> torch.Tensor:
+    b, _, h, w = thermal.shape
+    theta = thermal.new_zeros((b, 2, 3))
+    theta[:, 0, 0] = 1.0
+    theta[:, 1, 1] = 1.0
+
+    if w > 1:
+        theta[:, 0, 2] = 2.0 * shift_px[:, 0] / float(w - 1)
+    if h > 1:
+        theta[:, 1, 2] = 2.0 * shift_px[:, 1] / float(h - 1)
+
+    grid = F.affine_grid(theta, size = thermal.shape, align_corners = False)
+    return F.grid_sample(
+        thermal,
+        grid,
+        mode = "bilinear",
+        padding_mode = "zeros",
+        align_corners = False,
+    )
+
+
+def apply_synthetic_thermal_shift(
+    x4: torch.Tensor,
+    *,
+    max_shift_px: float,
+    p: float,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Apply a known synthetic shift to the thermal channel only.
+
+    Returns:
+    - shifted stacked input
+    - supervision target shift to align thermal back to RGB
+    - supervision target confidence (1 when aligned, smaller when shifted)
+    """
+    if max_shift_px <= 0.0 or p <= 0.0:
+        b = x4.shape[0]
+        zero_shift = x4.new_zeros((b, 2))
+        one_conf = x4.new_ones((b,))
+        return x4, zero_shift, one_conf
+
+    b = x4.shape[0]
+    device = x4.device
+    applied_shift = x4.new_empty((b, 2)).uniform_(-max_shift_px, max_shift_px)
+    mask = (torch.rand((b, 1), device = device) < p).float()
+    applied_shift = applied_shift * mask
+
+    rgb = x4[:, :3, :, :]
+    thermal = x4[:, 3:4, :, :]
+    thermal_shifted = _warp_thermal_with_shift(thermal, applied_shift)
+
+    target_shift = -applied_shift
+    max_norm = max(1e-6, float(max_shift_px) * (2.0 ** 0.5))
+    shift_norm = torch.linalg.vector_norm(applied_shift, dim = 1)
+    target_conf = (1.0 - shift_norm / max_norm).clamp_(0.0, 1.0)
+
+    return torch.cat([rgb, thermal_shifted], dim = 1), target_shift, target_conf
 
 
 def _extract_state_dict(ckpt_obj):
@@ -217,7 +277,7 @@ def main() -> None:
     ap.add_argument("--data_root", type = str, required = True)
     ap.add_argument("--out_dir", type = str, required = True)
 
-    ap.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "early", "late", "adaptive_late"])
+    ap.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign", "early", "late", "adaptive_late"])
     ap.add_argument("--epochs", type = int, default = 100)
     ap.add_argument("--batch_size", type = int, default = 1)
     ap.add_argument("--workers", type = int, default = 4)
@@ -260,6 +320,36 @@ def main() -> None:
         type = float,
         default = 4.0,
         help = "Maximum absolute thermal pre-alignment shift in pixels for adaptive_fpn_lite_cal_align.",
+    )
+    ap.add_argument(
+        "--synthetic_shift_px",
+        type = float,
+        default = 4.0,
+        help = "Maximum absolute synthetic thermal shift in pixels for misalignment-aware training.",
+    )
+    ap.add_argument(
+        "--synthetic_shift_p",
+        type = float,
+        default = 0.75,
+        help = "Probability of applying a synthetic thermal shift during misalignment-aware training.",
+    )
+    ap.add_argument(
+        "--lambda_shift_sup",
+        type = float,
+        default = 0.5,
+        help = "Weight for synthetic shift supervision loss in misalignment-aware training.",
+    )
+    ap.add_argument(
+        "--lambda_conf_sup",
+        type = float,
+        default = 0.2,
+        help = "Weight for thermal confidence supervision loss in misalignment-aware training.",
+    )
+    ap.add_argument(
+        "--thermal_conf_floor",
+        type = float,
+        default = 0.25,
+        help = "Lower bound for learned thermal confidence in the misalignment-aware model.",
     )
 
     args = ap.parse_args()
@@ -319,7 +409,7 @@ def main() -> None:
             is_train = False,
             deterministic = True,
         )
-    elif args.mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align"]:
+    elif args.mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign"]:
         ds_train = RGBTCC_RGBTBaseDset(
             base_train,
             crop_size = args.crop_size,
@@ -393,7 +483,7 @@ def main() -> None:
                 sigma = args.sigma,
                 return_pts = False,
             )
-        elif args.mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align"]:
+        elif args.mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign"]:
             ds_val = RGBTCC_EarlyFusionDataset(
                 root = args.data_root,
                 split = val_split,
@@ -425,6 +515,16 @@ def main() -> None:
     )
 
     print(f"[init] train = {len(ds_train)}  val = {len(ds_val)}  workers = {args.workers}")
+    if args.mode == "adaptive_fpn_lite_cal_misalign":
+        print(
+            f"[init] misalign-aware training: "
+            f"align_max_shift_px={args.align_max_shift_px} "
+            f"synthetic_shift_px={args.synthetic_shift_px} "
+            f"synthetic_shift_p={args.synthetic_shift_p} "
+            f"lambda_shift_sup={args.lambda_shift_sup} "
+            f"lambda_conf_sup={args.lambda_conf_sup} "
+            f"thermal_conf_floor={args.thermal_conf_floor}"
+        )
 
     # Model selection
     if args.mode == "rgb":
@@ -449,6 +549,16 @@ def main() -> None:
         model = CSRNetRGBT_AdaptiveFPNLiteCalAlign(
             load_imagenet = True,
             max_shift_px = args.align_max_shift_px,
+        ).to(device)
+
+        if args.init_base_ckpt:
+            missing, unexpected = _load_model_ckpt(model, args.init_base_ckpt, strict = False)
+            print(f"[init] warm-start base from {os.path.expanduser(args.init_base_ckpt)} (missing={missing} unexpected={unexpected})")
+    elif args.mode == "adaptive_fpn_lite_cal_misalign":
+        model = CSRNetRGBT_AdaptiveFPNLiteCalMisalign(
+            load_imagenet = True,
+            max_shift_px = args.align_max_shift_px,
+            thermal_conf_floor = args.thermal_conf_floor,
         ).to(device)
 
         if args.init_base_ckpt:
@@ -483,7 +593,7 @@ def main() -> None:
     teacher_model: Optional[nn.Module] = None
     use_kd = bool(args.teacher_base_ckpt) and (args.lambda_kd_map > 0.0 or args.lambda_kd_cnt > 0.0)
     if use_kd:
-        if args.mode not in ("base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align"):
+        if args.mode not in ("base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign"):
             raise ValueError("teacher_base_ckpt distillation is only supported for base-style 4-channel modes.")
         teacher_model = CSRNetRGBT_Base(load_imagenet = True).to(device)
         missing, unexpected = _load_model_ckpt(teacher_model, args.teacher_base_ckpt, strict = False)
@@ -531,6 +641,19 @@ def main() -> None:
             loss = loss + lambda_kd_cnt * cnt_loss
         return loss
 
+    def misalign_aux_loss_fn(
+        pred_shift_px: torch.Tensor,
+        target_shift_px: torch.Tensor,
+        thermal_conf: torch.Tensor,
+        target_conf: torch.Tensor,
+    ) -> torch.Tensor:
+        shift_scale = max(1e-6, float(args.align_max_shift_px))
+        pred_shift_norm = pred_shift_px / shift_scale
+        target_shift_norm = target_shift_px / shift_scale
+        shift_loss = F.smooth_l1_loss(pred_shift_norm, target_shift_norm, reduction = "mean")
+        conf_loss = F.mse_loss(thermal_conf, target_conf, reduction = "mean")
+        return args.lambda_shift_sup * shift_loss + args.lambda_conf_sup * conf_loss
+
     
     scaler = GradScaler(enabled = bool(args.amp))
 
@@ -559,9 +682,12 @@ def main() -> None:
             f"backbone_params={sum(p.numel() for p in backbone_params)} "
             f"head_params={sum(p.numel() for p in adaptive_head_params)}"
         )
-    elif args.mode in ("adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align"):
+    elif args.mode in ("adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign"):
         base_module_names = ("frontend", "backend", "output_layer")
-        head_module_names = ("lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out", "count_head", "align_feat", "align_fc")
+        head_module_names = (
+            "lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out", "count_head",
+            "align_feat", "align_fc", "shift_head", "conf_head",
+        )
 
         backbone_params = []
         adaptive_head_params = []
@@ -593,7 +719,7 @@ def main() -> None:
     opt = torch.optim.Adam(params, lr = args.lr, weight_decay = args.weight_decay)
 
     if args.use_onecycle:
-        if args.mode in ("adaptive_late", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align"):
+        if args.mode in ("adaptive_late", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign"):
             max_lrs = [args.max_lr, args.max_gate_lr]
         else:
             max_lrs = args.max_lr
@@ -640,12 +766,12 @@ def main() -> None:
                 raise AttributeError("CSRNetRGBT_AdaptiveLate must expose a gate module as .gate or .gate_net")
             # Freeze/unfreeze experts using freeze_backbones_epochs, but keep gate trainable.
             _set_requires_grad(gate_module, True)
-        elif args.mode in ("adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align") and args.freeze_backbones_epochs > 0:
+        elif args.mode in ("adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign") and args.freeze_backbones_epochs > 0:
             for name in ("frontend", "backend", "output_layer"):
                 mod = getattr(model, name, None)
                 if mod is not None:
                     _set_requires_grad(mod, ep > args.freeze_backbones_epochs)
-            for name in ("lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out", "count_head", "align_feat", "align_fc"):
+            for name in ("lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out", "count_head", "align_feat", "align_fc", "shift_head", "conf_head"):
                 mod = getattr(model, name, None)
                 if mod is not None:
                     _set_requires_grad(mod, True)
@@ -693,11 +819,30 @@ def main() -> None:
                 x, den_gt, _img_id, _meta = batch
                 x = x.to(device, non_blocking = True)
                 den_gt = den_gt.to(device, non_blocking = True)
+                target_shift_px = None
+                target_conf = None
+
+                if args.mode == "adaptive_fpn_lite_cal_misalign":
+                    x, target_shift_px, target_conf = apply_synthetic_thermal_shift(
+                        x,
+                        max_shift_px = float(args.synthetic_shift_px),
+                        p = float(args.synthetic_shift_p),
+                    )
 
                 if args.amp:
                     with torch.autocast(device_type = "cuda", dtype = torch.float16):
-                        den_pred = model(x)
+                        if args.mode == "adaptive_fpn_lite_cal_misalign":
+                            den_pred, aux = model(x, return_aux = True)
+                        else:
+                            den_pred = model(x)
                         loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
+                        if args.mode == "adaptive_fpn_lite_cal_misalign":
+                            loss = loss + misalign_aux_loss_fn(
+                                aux["pred_shift_px"],
+                                target_shift_px,
+                                aux["thermal_conf"],
+                                target_conf,
+                            )
                         if teacher_model is not None:
                             with torch.no_grad():
                                 teacher_pred = teacher_model(x)
@@ -708,8 +853,18 @@ def main() -> None:
                                 lambda_kd_cnt = args.lambda_kd_cnt,
                             )
                 else:
-                    den_pred = model(x)
+                    if args.mode == "adaptive_fpn_lite_cal_misalign":
+                        den_pred, aux = model(x, return_aux = True)
+                    else:
+                        den_pred = model(x)
                     loss = loss_fn(den_pred, den_gt, lambda_cnt = args.lambda_cnt)
+                    if args.mode == "adaptive_fpn_lite_cal_misalign":
+                        loss = loss + misalign_aux_loss_fn(
+                            aux["pred_shift_px"],
+                            target_shift_px,
+                            aux["thermal_conf"],
+                            target_conf,
+                        )
                     if teacher_model is not None:
                         with torch.no_grad():
                             teacher_pred = teacher_model(x)
