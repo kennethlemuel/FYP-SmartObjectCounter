@@ -1,0 +1,101 @@
+#!/bin/bash
+#PBS -N train_rgbt_adaptive_fpn_lite_cal_align_tuned_e400
+#PBS -P personal-kenneth0
+#PBS -l select=1:ngpus=1:ncpus=16:mem=110gb
+#PBS -l walltime=12:00:00
+#PBS -j oe
+
+set -euo pipefail
+umask 0022
+
+REPO_DEFAULT="/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter"
+REPO="${REPO_DEFAULT}"
+if [ -n "${PBS_O_WORKDIR:-}" ] && [ -f "${PBS_O_WORKDIR}/scripts/train_rgbt_align.py" ]; then
+  REPO="${PBS_O_WORKDIR}"
+fi
+
+LOG_DIR="${REPO}/logs"
+DATA_ROOT="${REPO}/data/RGBT-CC-CVPR2021"
+
+: "${PBS_JOBID:=manual}"
+: "${PBS_JOBNAME:=train_rgbt_adaptive_fpn_lite_cal_align_tuned_e400}"
+
+TS="$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="${LOG_DIR}/${PBS_JOBNAME}_${PBS_JOBID}_${TS}.log"
+OUT_DIR="${REPO}/outputs/${PBS_JOBNAME}/${PBS_JOBID}_${TS}"
+
+mkdir -p "${LOG_DIR}" "${OUT_DIR}"
+cd "${REPO}"
+
+exec > "${LOG_FILE}" 2>&1
+echo "[log] ${LOG_FILE}"
+echo "[job] name=${PBS_JOBNAME} id=${PBS_JOBID} host=$(hostname) time=$(date)"
+
+module purge
+module load pytorch/2.6.0-py3-cu11.8
+
+python3 - <<'PY'
+import torch
+print("torch", torch.__version__, "cuda", torch.cuda.is_available())
+PY
+
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+export PYTHONUNBUFFERED=1
+export PYTHONPATH="${REPO}:${PYTHONPATH:-}"
+
+EPOCHS=400
+BATCH_SIZE=1
+WORKERS=4
+SEED=0
+LR=3e-6
+MAX_LR=1e-5
+GATE_LR=1e-5
+MAX_GATE_LR=3e-5
+WEIGHT_DECAY=5e-4
+CROP_SIZE=224
+SIGMA=15.0
+DOWN=8
+LAMBDA_CNT=2e-3
+FREEZE_BACKBONES_EPOCHS=20
+ALIGN_MAX_SHIFT_PX="${ALIGN_MAX_SHIFT_PX:-4.0}"
+
+BASE_WARM_CKPT="${BASE_WARM_CKPT:-}"
+if [ -z "${BASE_WARM_CKPT}" ]; then
+  BASE_WARM_CKPT="$(ls -1t "${REPO}"/outputs/train_rgbt_base_e*/*/best.pth 2>/dev/null | head -n 1 || true)"
+fi
+
+EXTRA_ARGS=()
+if [ -n "${BASE_WARM_CKPT}" ]; then
+  echo "[init] warm-start base = ${BASE_WARM_CKPT}"
+  EXTRA_ARGS+=(--init_base_ckpt "${BASE_WARM_CKPT}")
+else
+  echo "[init] warm-start base = NONE"
+fi
+
+python3 -u scripts/train_rgbt_align.py \
+  --mode adaptive_fpn_lite_cal_align \
+  --data_root "${DATA_ROOT}" \
+  --out_dir "${OUT_DIR}" \
+  --epochs "${EPOCHS}" \
+  --batch_size "${BATCH_SIZE}" \
+  --workers "${WORKERS}" \
+  --seed "${SEED}" \
+  --lr "${LR}" \
+  --gate_lr "${GATE_LR}" \
+  --weight_decay "${WEIGHT_DECAY}" \
+  --use_onecycle \
+  --max_lr "${MAX_LR}" \
+  --max_gate_lr "${MAX_GATE_LR}" \
+  --freeze_backbones_epochs "${FREEZE_BACKBONES_EPOCHS}" \
+  --crop_size "${CROP_SIZE}" \
+  --sigma "${SIGMA}" \
+  --down "${DOWN}" \
+  --align_max_shift_px "${ALIGN_MAX_SHIFT_PX}" \
+  --lambda_cnt "${LAMBDA_CNT}" \
+  --clip_grad 1.0 \
+  --deterministic \
+  --val_fullres \
+  --val_img_h 768 \
+  --val_img_w 1024 \
+  --val_deterministic \
+  "${EXTRA_ARGS[@]}"
