@@ -48,7 +48,7 @@ def set_seed(seed: int, deterministic: bool = True) -> None:
         torch.backends.cudnn.benchmark = False
         # For newer pytorch versions
         try:
-            torch.use_deterministic_algorithms(True)
+            torch.use_deterministic_algorithms(True, warn_only = True)
         except Exception:
             pass
 
