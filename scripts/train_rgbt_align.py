@@ -30,6 +30,7 @@ from models.rgbt_adaptive_fpn_lite import CSRNetRGBT_AdaptiveFPNLite
 from models.rgbt_adaptive_fpn_lite_cal import CSRNetRGBT_AdaptiveFPNLiteCal
 from models.rgbt_adaptive_fpn_lite_cal_align import CSRNetRGBT_AdaptiveFPNLiteCalAlign
 from models.rgbt_adaptive_fpn_lite_cal_confidence import CSRNetRGBT_AdaptiveFPNLiteCalConfidence
+from models.rgbt_adaptive_fpn_lite_cal_dualstem import CSRNetRGBT_AdaptiveFPNLiteCalDualStem
 from models.rgbt_adaptive_fpn_lite_cal_misalign import CSRNetRGBT_AdaptiveFPNLiteCalMisalign
 from models.rgbt_early import CSRNetRGBT_Early
 from models.rgbt_late import CSRNetRGBT_Late
@@ -278,7 +279,7 @@ def main() -> None:
     ap.add_argument("--data_root", type = str, required = True)
     ap.add_argument("--out_dir", type = str, required = True)
 
-    ap.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign", "early", "late", "adaptive_late"])
+    ap.add_argument("--mode", type = str, default = "late", choices = ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_dualstem", "adaptive_fpn_lite_cal_misalign", "early", "late", "adaptive_late"])
     ap.add_argument("--epochs", type = int, default = 100)
     ap.add_argument("--batch_size", type = int, default = 1)
     ap.add_argument("--workers", type = int, default = 4)
@@ -410,7 +411,7 @@ def main() -> None:
             is_train = False,
             deterministic = True,
         )
-    elif args.mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign"]:
+    elif args.mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_dualstem", "adaptive_fpn_lite_cal_misalign"]:
         ds_train = RGBTCC_RGBTBaseDset(
             base_train,
             crop_size = args.crop_size,
@@ -484,7 +485,7 @@ def main() -> None:
                 sigma = args.sigma,
                 return_pts = False,
             )
-        elif args.mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign"]:
+        elif args.mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_dualstem", "adaptive_fpn_lite_cal_misalign"]:
             ds_val = RGBTCC_EarlyFusionDataset(
                 root = args.data_root,
                 split = val_split,
@@ -566,6 +567,12 @@ def main() -> None:
         if args.init_base_ckpt:
             missing, unexpected = _load_model_ckpt(model, args.init_base_ckpt, strict = False)
             print(f"[init] warm-start base from {os.path.expanduser(args.init_base_ckpt)} (missing={missing} unexpected={unexpected})")
+    elif args.mode == "adaptive_fpn_lite_cal_dualstem":
+        model = CSRNetRGBT_AdaptiveFPNLiteCalDualStem(load_imagenet = True).to(device)
+
+        if args.init_base_ckpt:
+            missing, unexpected = _load_model_ckpt(model, args.init_base_ckpt, strict = False)
+            print(f"[init] warm-start base from {os.path.expanduser(args.init_base_ckpt)} (missing={missing} unexpected={unexpected})")
     elif args.mode == "adaptive_fpn_lite_cal_misalign":
         model = CSRNetRGBT_AdaptiveFPNLiteCalMisalign(
             load_imagenet = True,
@@ -605,7 +612,7 @@ def main() -> None:
     teacher_model: Optional[nn.Module] = None
     use_kd = bool(args.teacher_base_ckpt) and (args.lambda_kd_map > 0.0 or args.lambda_kd_cnt > 0.0)
     if use_kd:
-        if args.mode not in ("base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign"):
+        if args.mode not in ("base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_dualstem", "adaptive_fpn_lite_cal_misalign"):
             raise ValueError("teacher_base_ckpt distillation is only supported for base-style 4-channel modes.")
         teacher_model = CSRNetRGBT_Base(load_imagenet = True).to(device)
         missing, unexpected = _load_model_ckpt(teacher_model, args.teacher_base_ckpt, strict = False)
@@ -694,8 +701,8 @@ def main() -> None:
             f"backbone_params={sum(p.numel() for p in backbone_params)} "
             f"head_params={sum(p.numel() for p in adaptive_head_params)}"
         )
-    elif args.mode in ("adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign"):
-        base_module_names = ("frontend", "backend", "output_layer")
+    elif args.mode in ("adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_dualstem", "adaptive_fpn_lite_cal_misalign"):
+        base_module_names = ("frontend", "backend", "output_layer", "rgb_stem", "t_stem", "stem_fuse")
         head_module_names = (
             "lat2", "lat3", "lat4", "latb", "scale_gate", "refine", "residual_out", "count_head",
             "align_feat", "align_fc", "shift_head", "conf_head",
@@ -731,7 +738,7 @@ def main() -> None:
     opt = torch.optim.Adam(params, lr = args.lr, weight_decay = args.weight_decay)
 
     if args.use_onecycle:
-        if args.mode in ("adaptive_late", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign"):
+        if args.mode in ("adaptive_late", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_dualstem", "adaptive_fpn_lite_cal_misalign"):
             max_lrs = [args.max_lr, args.max_gate_lr]
         else:
             max_lrs = args.max_lr
@@ -778,8 +785,8 @@ def main() -> None:
                 raise AttributeError("CSRNetRGBT_AdaptiveLate must expose a gate module as .gate or .gate_net")
             # Freeze/unfreeze experts using freeze_backbones_epochs, but keep gate trainable.
             _set_requires_grad(gate_module, True)
-        elif args.mode in ("adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign") and args.freeze_backbones_epochs > 0:
-            for name in ("frontend", "backend", "output_layer"):
+        elif args.mode in ("adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_dualstem", "adaptive_fpn_lite_cal_misalign") and args.freeze_backbones_epochs > 0:
+            for name in ("frontend", "backend", "output_layer", "rgb_stem", "t_stem", "stem_fuse"):
                 mod = getattr(model, name, None)
                 if mod is not None:
                     _set_requires_grad(mod, ep > args.freeze_backbones_epochs)
