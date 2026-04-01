@@ -31,6 +31,7 @@ from models.rgbt_base import CSRNetRGBT_Base
 from models.rgbt_adaptive_fpn_lite import CSRNetRGBT_AdaptiveFPNLite
 from models.rgbt_adaptive_fpn_lite_cal import CSRNetRGBT_AdaptiveFPNLiteCal
 from models.rgbt_adaptive_fpn_lite_cal_align import CSRNetRGBT_AdaptiveFPNLiteCalAlign
+from models.rgbt_adaptive_fpn_lite_cal_confidence import CSRNetRGBT_AdaptiveFPNLiteCalConfidence
 from models.rgbt_adaptive_fpn_lite_cal_misalign import CSRNetRGBT_AdaptiveFPNLiteCalMisalign
 try:
     from models.rgbt_early import CSRNetRGBT_EarlyFusion as CSRNetRGBT_Early
@@ -135,6 +136,11 @@ def build_model(
             load_imagenet = load_imagenet,
             max_shift_px = align_max_shift_px,
         )
+    if mode == "adaptive_fpn_lite_cal_conf":
+        return CSRNetRGBT_AdaptiveFPNLiteCalConfidence(
+            load_imagenet = load_imagenet,
+            thermal_conf_floor = thermal_conf_floor,
+        )
     if mode == "adaptive_fpn_lite_cal_misalign":
         return CSRNetRGBT_AdaptiveFPNLiteCalMisalign(
             load_imagenet = load_imagenet,
@@ -181,7 +187,7 @@ def build_dataset(
             sigma = sigma,
             return_pts = False,
         )
-    if mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign"]:
+    if mode in ["base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign"]:
         return RGBTCC_EarlyFusionDataset(
             root = root,
             split = split,
@@ -219,7 +225,7 @@ def forward_density(model: torch.nn.Module, mode: str, batch: Tuple[Any, ...], d
     """
     mode = mode.lower()
 
-    if mode in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign"]:
+    if mode in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign"]:
         #dataset returns: (x, den, fname, gt_count)
         x = batch[0].to(device, non_blocking = True)
         out = model(x)
@@ -272,7 +278,7 @@ def benchmark_forward(
     model.eval()
 
     #Move inputs to device once, avoid data transfer in timing loop.
-    if mode.lower() in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign"]:
+    if mode.lower() in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign"]:
         x = batch[0].to(device, non_blocking = True)
         batch_on_device = (x,)
     else:
@@ -285,7 +291,7 @@ def benchmark_forward(
         torch.cuda.reset_peak_memory_stats(device)
 
     for _ in range(max(0, warmup)):
-        if mode.lower() in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign"]:
+        if mode.lower() in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign"]:
             out = model(batch_on_device[0])
         else:
             out = model(batch_on_device[0], batch_on_device[1])
@@ -296,7 +302,7 @@ def benchmark_forward(
 
     t0 = time.perf_counter()
     for _ in range(max(1, iters)):
-        if mode.lower() in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign"]:
+        if mode.lower() in ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign"]:
             out = model(batch_on_device[0])
         else:
             out = model(batch_on_device[0], batch_on_device[1])
@@ -374,7 +380,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type = str, required = True, help = "Dataset root (contains train/val/test folders).")
     parser.add_argument("--split", type = str, default = "val", choices = ["train", "val", "test"])
-    parser.add_argument("--mode", type = str, required = True, choices = ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_misalign", "early", "late", "adaptive_late"])
+    parser.add_argument("--mode", type = str, required = True, choices = ["rgb", "t", "base", "adaptive_fpn_lite", "adaptive_fpn_lite_cal", "adaptive_fpn_lite_cal_align", "adaptive_fpn_lite_cal_conf", "adaptive_fpn_lite_cal_misalign", "early", "late", "adaptive_late"])
     parser.add_argument("--ckpt", type = str, required = True, help = "Path to checkpoint (.pth).")
     parser.add_argument("--strict_ckpt", action = "store_true", help = "Load checkpoint with strict=True (fail on missing/unexpected keys).")
     parser.add_argument("--zero_cal_bias", action = "store_true", help = "After loading, zero rgb_cal/t_cal biases (debug constant-offset blow-up).")
