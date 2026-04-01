@@ -1,0 +1,21 @@
+{
+  "mode": "adaptive_fpn_lite_cal_misalign",
+  "split": "test",
+  "img_h": 768,
+  "img_w": 1024,
+  "out_stride": 8,
+  "sigma": 15.0,
+  "align_max_shift_px": 4.0,
+  "thermal_conf_floor": 0.25,
+  "device": "cuda",
+  "seed": 0,
+  "deterministic": false,
+  "params_total": 16441177,
+  "params_trainable": 16441177,
+  "model_size_mb": 62.71811294555664,
+  "mae": 23.616911767721177,
+  "rmse": 40.0925086443084,
+  "num_images": 800,
+  "eval_ms_per_image": 15.256232874235138,
+  "eval_fps": 65.54698058449337
+}
