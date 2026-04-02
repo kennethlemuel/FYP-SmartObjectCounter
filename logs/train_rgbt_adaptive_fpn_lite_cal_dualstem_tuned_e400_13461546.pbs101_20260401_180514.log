@@ -1,0 +1,18 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_fpn_lite_cal_dualstem_tuned_e400_13461546.pbs101_20260401_180514.log
+[job] name=train_rgbt_adaptive_fpn_lite_cal_dualstem_tuned_e400 id=13461546.pbs101 host=x1000c1s3b0n0 time=Wed Apr  1 18:05:14 +08 2026
+torch 2.6.0+cu118 cuda True
+[init] warm-start base = /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/train_rgbt_base_e400/13092178.pbs101_20260309_120948/best.pth
+[init] device = cuda
+[init] val_fullres = True (split=val, img=768x1024)
+[init] train = 1030  val = 200  workers = 4
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt_align.py", line 964, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt_align.py", line 571, in main
+    model = CSRNetRGBT_AdaptiveFPNLiteCalDualStem(load_imagenet = True).to(device)
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/models/rgbt_adaptive_fpn_lite_cal_dualstem.py", line 69, in __init__
+    fuse_conv.weight[:, :32] = conv2.weight[:, :32]
+    ~~~~~~~~~~~~~~~~^^^^^^^^
+RuntimeError: The expanded size of the tensor (1) must match the existing size (3) at non-singleton dimension 3.  Target sizes: [64, 32, 1, 1].  Tensor sizes: [64, 32, 3, 3]
