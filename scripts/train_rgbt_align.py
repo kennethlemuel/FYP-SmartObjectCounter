@@ -149,6 +149,22 @@ def _load_model_ckpt(model: nn.Module, ckpt_path: str, *, strict: bool = False, 
         if len(sd_sub) >= 10:
             sd = sd_sub
 
+    if not strict:
+        model_sd = model.state_dict()
+        filtered_sd = {}
+        skipped_mismatch = 0
+        for k, v in sd.items():
+            if k not in model_sd:
+                filtered_sd[k] = v
+                continue
+            if model_sd[k].shape != v.shape:
+                skipped_mismatch += 1
+                continue
+            filtered_sd[k] = v
+        sd = filtered_sd
+        if skipped_mismatch > 0:
+            print(f"[init] skipped {skipped_mismatch} mismatched checkpoint tensors while warm-starting")
+
     res = model.load_state_dict(sd, strict = strict)
     return len(res.missing_keys), len(res.unexpected_keys)
 
