@@ -1,0 +1,23 @@
+[log] /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/logs/train_rgbt_adaptive_fpn_lite_cal_dualstem_tuned_e400_13466374.pbs101_20260402_105348.log
+[job] name=train_rgbt_adaptive_fpn_lite_cal_dualstem_tuned_e400 id=13466374.pbs101 host=x1000c2s5b0n0 time=Thu Apr  2 10:53:48 +08 2026
+torch 2.6.0+cu118 cuda True
+[init] warm-start base = /scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/outputs/train_rgbt_base_e400/13092178.pbs101_20260309_120948/best.pth
+[init] device = cuda
+[init] val_fullres = True (split=val, img=768x1024)
+[init] train = 1030  val = 200  workers = 4
+Traceback (most recent call last):
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt_align.py", line 964, in <module>
+    main()
+    ~~~~^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt_align.py", line 574, in main
+    missing, unexpected = _load_model_ckpt(model, args.init_base_ckpt, strict = False)
+                          ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/users/ntu/kenneth0/FYP-SmartObjectCounter/scripts/train_rgbt_align.py", line 152, in _load_model_ckpt
+    res = model.load_state_dict(sd, strict = strict)
+  File "/app/apps/pytorch/2.6.0-py3-cu11.8/lib/python3.13/site-packages/torch/nn/modules/module.py", line 2581, in load_state_dict
+    raise RuntimeError(
+    ...<3 lines>...
+    )
+RuntimeError: Error(s) in loading state_dict for CSRNetRGBT_AdaptiveFPNLiteCalDualStem:
+	size mismatch for frontend.10.weight: copying a param with shape torch.Size([256, 128, 3, 3]) from checkpoint, the shape in current model is torch.Size([256, 256, 3, 3]).
+	size mismatch for frontend.17.weight: copying a param with shape torch.Size([512, 256, 3, 3]) from checkpoint, the shape in current model is torch.Size([512, 512, 3, 3]).
