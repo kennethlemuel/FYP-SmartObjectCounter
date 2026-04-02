@@ -36,7 +36,7 @@ class CSRNetRGBT_AdaptiveFPNLiteCalDualStem(nn.Module):
             nn.ReLU(inplace = True),
         )
         self.stem_fuse = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size = 1, bias = True),
+            nn.Conv2d(64, 64, kernel_size = 3, padding = 1, bias = True),
             nn.ReLU(inplace = True),
         )
 
@@ -65,7 +65,7 @@ class CSRNetRGBT_AdaptiveFPNLiteCalDualStem(nn.Module):
         if load_imagenet:
             with torch.no_grad():
                 fuse_conv.weight.zero_()
-                # Approximate the original conv2 by averaging its response over the split stems.
+                # Reuse the original conv2 weights after the shallow dual stems.
                 fuse_conv.weight[:, :32] = conv2.weight[:, :32]
                 fuse_conv.weight[:, 32:] = conv2.weight[:, 32:]
                 if conv2.bias is not None:
