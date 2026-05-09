@@ -67,7 +67,31 @@ def parse_args():
         help="Optional repeated row note. Format: IMAGE_ID|free text",
     )
     ap.add_argument("--include_gt", action="store_true")
+    ap.add_argument(
+        "--device",
+        default="cuda",
+        choices=["cuda", "mps", "cpu", "auto"],
+        help="Inference device. Use 'auto' for local demo export on Mac; default keeps the original CUDA workflow.",
+    )
     return ap.parse_args()
+
+
+def resolve_device(device_name: str) -> torch.device:
+    if device_name == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+    if device_name == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is required for qualitative export. Use --device auto, mps, or cpu for local export.")
+        return torch.device("cuda")
+    if device_name == "mps":
+        if not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+            raise RuntimeError("MPS is not available on this machine. Use --device cpu or auto.")
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 def load_font(size: int) -> ImageFont.FreeTypeFont:
@@ -327,14 +351,13 @@ def render_figure(
 
 def main():
     args = parse_args()
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required for qualitative export. Run on a GPU node.")
+    device = resolve_device(args.device)
 
     model_specs = parse_model_specs(args.model_spec)
     notes = parse_notes(args.note)
     sample_map = build_sample_map(Path(args.data_root).resolve(), args.split)
     samples = [sample_map[sid] for sid in args.image_ids]
-    device = torch.device("cuda")
+    print(f"[device] {device}")
 
     models = []
     for spec in model_specs:
