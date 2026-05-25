@@ -13,6 +13,41 @@ The in-house model progression covered in this project is:
 
 The final proposed model is **Adaptive FPN Lite + Calibration**, implemented in `models/rgbt_adaptive_fpn_lite_cal.py` and run through `scripts/train_rgbt.py` / `scripts/eval_rgbt.py`.
 
+## Project Highlights
+
+| Model | Parameters | FPS | MAE | RMSE |
+| --- | ---: | ---: | ---: | ---: |
+| RGB-only | 16.26M | 92.65 | 38.711 | 63.981 |
+| Thermal-only | 16.26M | 30.93 | 41.823 | 73.093 |
+| RGBT Base | 16.26M | 63.75 | 22.172 | 38.028 |
+| RGB-T Adaptive Late | 32.53M | 29.97 | 40.359 | 73.284 |
+| RGB-T Adaptive FPN | 50.72M | 36.15 | 41.774 | 76.812 |
+| **Adaptive FPN Lite + Calibration** | **16.44M** | **66.91** | **22.127** | **37.938** |
+
+The main result is that RGB-T fusion gives a clear gain over either modality alone, while the final lightweight model keeps the practical speed and parameter profile close to the strong shared-backbone baseline.
+
+## Visual Overview
+
+### Proposed Architecture
+
+![Adaptive FPN Lite + Calibration architecture](docs/assets/adaptive_fpn_lite_cal_architecture.png)
+
+### Accuracy-Efficiency Tradeoff
+
+![Accuracy-efficiency scatter plot](docs/assets/accuracy_efficiency_scatter.png)
+
+### Qualitative Density Map Examples
+
+The model predicts a density map, and the final crowd count is obtained by summing over the predicted density values.
+
+![Qualitative RGB-T density map examples](docs/assets/qualitative_density_examples.png)
+
+### RGB-T Misalignment Robustness
+
+RGB and thermal views may be slightly misaligned in practice, so robustness variants were tested to check whether explicit correction improves fusion.
+
+![RGB-T misalignment robustness examples](docs/assets/rgbt_misalignment_robustness.png)
+
 ## Repository Overview
 
 ```text
